@@ -178,6 +178,10 @@ int x11_get_window_info(unsigned long wid, WindowInfo *out)
 
 int x11_focus_window(unsigned long wid)
 {
+	/* Use both focus and activate for reliable keyboard delivery.
+	 * xdo_focus_window sets X11 input focus (needed for XTest keys),
+	 * xdo_activate_window raises the window in the stacking order. */
+	xdo_focus_window(g_xdo, (Window)wid);
 	return xdo_activate_window(g_xdo, (Window)wid);
 }
 
@@ -216,12 +220,17 @@ int x11_click(int button, int repeat)
 
 int x11_type_text(const char *text, int delay_ms)
 {
+	/* Keyboard stays on XTest — see x11_key_press comment. */
 	return xdo_enter_text_window(g_xdo, CURRENTWINDOW, text,
 	                             delay_ms * 1000);
 }
 
 int x11_key_press(const char *keys)
 {
+	/* Keyboard stays on XTest/xdotool — it works fine on Xwayland.
+	 * uinput keyboard events are dropped because mutter classifies
+	 * our device as a pointer (ABS axes) and won't forward key
+	 * events from pointer devices. */
 	return xdo_send_keysequence_window(g_xdo, CURRENTWINDOW, keys, 0);
 }
 

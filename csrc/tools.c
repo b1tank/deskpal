@@ -178,11 +178,6 @@ cJSON *tool_click(const cJSON *params)
 	int button = json_int(params, "button", 1);
 	int dbl = json_bool(params, "doubleClick", 0);
 
-	if (wid) {
-		x11_focus_window(wid);
-		usleep_ms(100);
-	}
-
 	unsigned long target = wid ? wid : x11_get_active_window();
 	WindowInfo info;
 	if (x11_get_window_info(target, &info) != 0) {
@@ -192,6 +187,8 @@ cJSON *tool_click(const cJSON *params)
 	int abs_x = info.x + x;
 	int abs_y = info.y + y;
 
+	/* Move cursor to click position — with uinput this also
+	 * gives the window compositor-level focus automatically. */
 	x11_mouse_move(abs_x, abs_y);
 	usleep_ms(10);
 	x11_click(button, dbl ? 2 : 1);
@@ -218,10 +215,6 @@ cJSON *tool_click_text(const cJSON *params)
 
 	unsigned long wid = resolve_window(params);
 	unsigned long target = wid ? wid : x11_get_active_window();
-
-	/* Focus */
-	x11_focus_window(target);
-	usleep_ms(150);
 
 	/* Capture window pixels */
 	WindowInfo info;
@@ -688,7 +681,7 @@ cJSON *tool_type_text(const cJSON *params)
 	unsigned long wid = resolve_window(params);
 	if (wid) {
 		x11_focus_window(wid);
-		usleep_ms(100);
+		usleep_ms(50);
 	}
 
 	x11_type_text(text, delay);
@@ -707,7 +700,7 @@ cJSON *tool_key_press(const cJSON *params)
 	unsigned long wid = resolve_window(params);
 	if (wid) {
 		x11_focus_window(wid);
-		usleep_ms(100);
+		usleep_ms(50);
 	}
 
 	x11_key_press(keys);

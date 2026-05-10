@@ -37,4 +37,10 @@ int  uinput_mouse_up(int button);
 /* Scroll: positive = down/right, negative = up/left. */
 int  uinput_scroll(int amount);
 
+/* Press a key combo in xdotool format, e.g. "Return", "ctrl+a". */
+int  uinput_key_press(const char *keys);
+
+/* Type a single ASCII character (handles shift for uppercase/symbols). */
+int  uinput_type_char(char c);
+
 #endif /* DESKPAL_UINPUT_H */
