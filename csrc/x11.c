@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "x11.h"
+#include "uinput.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,11 +22,25 @@ xdo_t *g_xdo = NULL;  /* non-static: also used by screenshot.c */
 int x11_init(void)
 {
 	g_xdo = xdo_new(NULL);
-	return g_xdo ? 0 : -1;
+	if (!g_xdo) return -1;
+
+	/* Try to set up uinput for Wayland-compatible input.
+	 * Get screen dimensions from X11 for the ABS axis range. */
+	Display *dpy = g_xdo->xdpy;
+	int sw = dpy ? DisplayWidth(dpy, DefaultScreen(dpy))  : 3840;
+	int sh = dpy ? DisplayHeight(dpy, DefaultScreen(dpy)) : 2160;
+	if (uinput_init(sw, sh) == 0) {
+		fprintf(stderr, "deskpal: uinput enabled (%dx%d)\n", sw, sh);
+	} else {
+		fprintf(stderr, "deskpal: uinput unavailable, using XTest fallback\n");
+	}
+
+	return 0;
 }
 
 void x11_cleanup(void)
 {
+	uinput_cleanup();
 	if (g_xdo) {
 		xdo_free(g_xdo);
 		g_xdo = NULL;
@@ -182,11 +197,15 @@ unsigned long x11_get_active_window(void)
 
 int x11_mouse_move(int x, int y)
 {
+	if (uinput_available())
+		return uinput_mouse_move(x, y);
 	return xdo_move_mouse(g_xdo, x, y, 0);
 }
 
 int x11_click(int button, int repeat)
 {
+	if (uinput_available())
+		return uinput_click(button, repeat);
 	for (int i = 0; i < repeat; i++) {
 		if (xdo_click_window(g_xdo, CURRENTWINDOW, button) != 0)
 			return -1;
@@ -208,6 +227,11 @@ int x11_key_press(const char *keys)
 
 int x11_scroll(int button, int clicks)
 {
+	if (uinput_available()) {
+		/* button 4=up, 5=down → amount: positive=down */
+		int amount = (button == 4) ? -clicks : clicks;
+		return uinput_scroll(amount);
+	}
 	for (int i = 0; i < clicks; i++) {
 		if (xdo_click_window(g_xdo, CURRENTWINDOW, button) != 0)
 			return -1;
@@ -220,35 +244,39 @@ int x11_drag(int x1, int y1, int x2, int y2, int button, int steps)
 	if (steps < 1) steps = 10;
 
 	/* Move to start */
-	xdo_move_mouse(g_xdo, x1, y1, 0);
+	x11_mouse_move(x1, y1);
 	usleep(50000);
 
 	/* Press */
-	xdo_mouse_down(g_xdo, CURRENTWINDOW, button);
+	x11_mouse_down(button);
 	usleep(50000);
 
 	/* Interpolate movement */
 	for (int i = 1; i <= steps; i++) {
 		int cx = x1 + (x2 - x1) * i / steps;
 		int cy = y1 + (y2 - y1) * i / steps;
-		xdo_move_mouse(g_xdo, cx, cy, 0);
+		x11_mouse_move(cx, cy);
 		usleep(10000); /* 10ms per step */
 	}
 
 	usleep(50000);
 
 	/* Release */
-	xdo_mouse_up(g_xdo, CURRENTWINDOW, button);
+	x11_mouse_up(button);
 	return 0;
 }
 
 int x11_mouse_down(int button)
 {
+	if (uinput_available())
+		return uinput_mouse_down(button);
 	return xdo_mouse_down(g_xdo, CURRENTWINDOW, button);
 }
 
 int x11_mouse_up(int button)
 {
+	if (uinput_available())
+		return uinput_mouse_up(button);
 	return xdo_mouse_up(g_xdo, CURRENTWINDOW, button);
 }
 

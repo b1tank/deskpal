@@ -29,6 +29,7 @@ core_src = files(
   'csrc/main.c',
   'csrc/mcp.c',
   'csrc/x11.c',
+  'csrc/uinput.c',
   'csrc/screenshot.c',
   'csrc/ocr.c',
   'csrc/tools.c',
