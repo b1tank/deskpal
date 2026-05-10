@@ -1,9 +1,12 @@
 /*
- * deskpal — uinput virtual mouse for Wayland-compatible input
+ * deskpal — uinput virtual input devices for Wayland-compatible input
  *
- * Uses /dev/uinput to inject real input events that the Wayland
- * compositor treats as hardware input.  Falls back gracefully
- * when uinput is not accessible.
+ * Creates two separate devices via /dev/uinput:
+ *   - "deskpal-pointer"  — mouse (ABS_X/Y, buttons, scroll)
+ *   - "deskpal-keyboard" — keyboard (KEY_* only, no ABS axes)
+ *
+ * Separating them ensures mutter/KWin correctly classifies each
+ * device, and both coexist with the user's physical hardware.
  *
  * Copyright (c) 2026 deskpal contributors
  * SPDX-License-Identifier: MIT
@@ -13,16 +16,19 @@
 
 #include <stdbool.h>
 
-/* Try to open /dev/uinput and create a virtual pointer.
+/* Open /dev/uinput and create virtual pointer + keyboard devices.
  * Returns 0 on success, -1 if uinput is unavailable.
  * Safe to call multiple times; second call is a no-op. */
 int  uinput_init(int screen_width, int screen_height);
 
-/* Destroy the virtual device and close the fd. */
+/* Destroy both virtual devices and close the fds. */
 void uinput_cleanup(void);
 
-/* True if the uinput device was created successfully. */
+/* True if the pointer device was created. */
 bool uinput_available(void);
+
+/* True if the keyboard device was created. */
+bool uinput_kbd_available(void);
 
 /* Move the pointer to absolute screen coordinates. */
 int  uinput_mouse_move(int x, int y);

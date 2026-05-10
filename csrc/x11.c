@@ -30,7 +30,9 @@ int x11_init(void)
 	int sw = dpy ? DisplayWidth(dpy, DefaultScreen(dpy))  : 3840;
 	int sh = dpy ? DisplayHeight(dpy, DefaultScreen(dpy)) : 2160;
 	if (uinput_init(sw, sh) == 0) {
-		fprintf(stderr, "deskpal: uinput enabled (%dx%d)\n", sw, sh);
+		fprintf(stderr, "deskpal: uinput pointer (%dx%d)%s\n",
+			sw, sh,
+			uinput_kbd_available() ? " + keyboard" : " (keyboard fallback: XTest)");
 	} else {
 		fprintf(stderr, "deskpal: uinput unavailable, using XTest fallback\n");
 	}
@@ -220,17 +222,21 @@ int x11_click(int button, int repeat)
 
 int x11_type_text(const char *text, int delay_ms)
 {
-	/* Keyboard stays on XTest — see x11_key_press comment. */
+	if (uinput_kbd_available()) {
+		for (int i = 0; text[i]; i++) {
+			uinput_type_char(text[i]);
+			if (delay_ms > 0) usleep(delay_ms * 1000);
+		}
+		return 0;
+	}
 	return xdo_enter_text_window(g_xdo, CURRENTWINDOW, text,
 	                             delay_ms * 1000);
 }
 
 int x11_key_press(const char *keys)
 {
-	/* Keyboard stays on XTest/xdotool — it works fine on Xwayland.
-	 * uinput keyboard events are dropped because mutter classifies
-	 * our device as a pointer (ABS axes) and won't forward key
-	 * events from pointer devices. */
+	if (uinput_kbd_available())
+		return uinput_key_press(keys);
 	return xdo_send_keysequence_window(g_xdo, CURRENTWINDOW, keys, 0);
 }
 
