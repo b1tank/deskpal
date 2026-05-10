@@ -1,0 +1,50 @@
+project('deskpal', 'c',
+  version : '0.2.0',
+  default_options : ['c_std=c17', 'warning_level=2'])
+
+# ── System dependencies ──────────────────────────────────────────────────────
+xcb_dep       = dependency('xcb')
+xcb_shm_dep   = dependency('xcb-shm')
+x11_dep       = dependency('x11')
+png_dep       = dependency('libpng', required : true)
+dbus_dep      = dependency('dbus-1', required : true)
+
+# libxdo doesn't have pkg-config, use compiler check
+cc = meson.get_compiler('c')
+xdo_dep = cc.find_library('xdo', required : true)
+
+# x11-xcb for XGetXCBConnection
+x11xcb_dep    = dependency('x11-xcb', required : true)
+
+# Optional: tesseract (dlopen at runtime, headers needed at build time)
+tesseract_dep = dependency('tesseract', required : false)
+lept_dep      = dependency('lept', required : false)
+
+# ── Vendored sources ─────────────────────────────────────────────────────────
+vendor_inc = include_directories('vendor/cjson', 'vendor/stb')
+vendor_src = files('vendor/cjson/cJSON.c')
+
+# ── Core sources ─────────────────────────────────────────────────────────────
+core_src = files(
+  'csrc/main.c',
+  'csrc/mcp.c',
+  'csrc/x11.c',
+  'csrc/screenshot.c',
+  'csrc/ocr.c',
+  'csrc/tools.c',
+)
+
+c_args = ['-D_GNU_SOURCE']
+link_args = ['-lm']
+
+if tesseract_dep.found() and lept_dep.found()
+  c_args += '-DHAVE_TESSERACT=1'
+endif
+
+executable('deskpal',
+  core_src, vendor_src,
+  include_directories : [vendor_inc, include_directories('csrc')],
+  dependencies : [xcb_dep, xcb_shm_dep, x11_dep, x11xcb_dep, xdo_dep, png_dep, dbus_dep],
+  c_args : c_args,
+  link_args : link_args + ['-ldl'],  # for dlopen
+  install : true)
