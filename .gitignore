@@ -1,6 +1,5 @@
-node_modules/
-dist/
-*.tgz
 build/
 *.o
 *.a
+*.tgz
+node_modules/

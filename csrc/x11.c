@@ -1,5 +1,8 @@
 /*
- * deskpal — X11/XCB window management and input via libxdo
+ * deskpal — X11/XCB window management and input
+ *
+ * Uses uinput virtual devices for mouse/keyboard (Wayland-compatible),
+ * with libxdo fallback for right-click context menus on Xwayland.
  *
  * Copyright (c) 2026 deskpal contributors
  * SPDX-License-Identifier: MIT

@@ -1,32 +1,21 @@
 {
   "name": "deskpal",
-  "version": "1.0.0",
-  "description": "Playwright for the desktop — MCP server giving AI agents eyes and hands for native Linux apps (GTK, Qt, Electron, any X11/Wayland window)",
-  "main": "dist/index.js",
-  "type": "module",
+  "version": "0.2.0",
+  "description": "Playwright for the desktop — a C-native MCP server giving AI agents eyes and hands for any Linux desktop app",
   "bin": {
-    "deskpal": "dist/index.js"
+    "deskpal": "build/deskpal"
   },
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "meson setup build --reconfigure 2>/dev/null; ninja -C build",
+    "test": "python3 test/e2e_desktop.py && python3 test/e2e_sysmon.py"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/b1tank/deskpal.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/b1tank/deskpal/issues"
   },
-  "homepage": "https://github.com/b1tank/deskpal#readme",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@types/node": "^25.6.2",
-    "typescript": "^6.0.3",
-    "zod": "^4.4.3"
-  }
+  "homepage": "https://github.com/b1tank/deskpal#readme"
 }
