@@ -203,19 +203,29 @@ unsigned long x11_get_active_window(void)
 
 int x11_mouse_move(int x, int y)
 {
-	if (uinput_available())
-		return uinput_mouse_move(x, y);
+	if (uinput_available()) {
+		uinput_mouse_move(x, y);
+		/* Also sync the X11 cursor position so xdotool-based
+		 * operations (e.g. right-click fallback) work correctly. */
+		xdo_move_mouse(g_xdo, x, y, 0);
+		return 0;
+	}
 	return xdo_move_mouse(g_xdo, x, y, 0);
 }
 
 int x11_click(int button, int repeat)
 {
-	if (uinput_available())
+	if (uinput_available() && button == 1)
 		return uinput_click(button, repeat);
+	/* Right/middle click: use xdotool CLI rather than libxdo because
+	 * xdo_click_window(CURRENTWINDOW) via XTest doesn't trigger GTK
+	 * context menus on Xwayland. The CLI xdotool click works. */
 	for (int i = 0; i < repeat; i++) {
-		if (xdo_click_window(g_xdo, CURRENTWINDOW, button) != 0)
+		char cmd[64];
+		snprintf(cmd, sizeof(cmd), "xdotool click %d", button);
+		if (system(cmd) != 0)
 			return -1;
-		if (i < repeat - 1) usleep(50000); /* 50ms between clicks */
+		if (i < repeat - 1) usleep(50000);
 	}
 	return 0;
 }

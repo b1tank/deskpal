@@ -105,6 +105,10 @@ int uinput_init(int screen_width, int screen_height)
 	ioctl(g_ptr_fd, UI_SET_ABSBIT, ABS_Y);
 	ioctl(g_ptr_fd, UI_SET_RELBIT, REL_WHEEL);
 
+	/* Mark as a pointer device (not a touchscreen) so compositors
+	 * treat BTN_RIGHT as a context-menu trigger. */
+	ioctl(g_ptr_fd, UI_SET_PROPBIT, INPUT_PROP_POINTER);
+
 	struct uinput_user_dev pdev;
 	memset(&pdev, 0, sizeof(pdev));
 	snprintf(pdev.name, UINPUT_MAX_NAME_SIZE, "deskpal-pointer");

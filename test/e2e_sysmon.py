@@ -219,68 +219,199 @@ def make_tests(d: DeskpalClient):
         return ok, ''
     tests.append(('key_press Escape closes search', test_escape_close_search))
 
-    # ── Phase 5: Hamburger menu ──────────────────────────────────────────
+    # ── Phase 5: Hamburger menu — click each item by text ──────────────
 
-    def test_hamburger_open():
-        r = d.tool('click_text', {'windowName': WIN, 'text': '☰'})
-        if 'not found' in r.lower() or 'could not find' in r.lower():
-            # Try open via keyboard
-            r = d.tool('key_press', {'windowName': WIN, 'keys': 'F10'})
-        time.sleep(0.5)
-        d.screenshot('08_hamburger_open')
-        verify = d.tool('read_screen_text', {'windowName': WIN})
-        ok = any(w in verify for w in ['All Processes', 'My Processes', 'Active', 'Preferences', 'About'])
-        return ok, '' if ok else verify[:80]
-    tests.append(('open hamburger menu', test_hamburger_open))
-
-    def test_hamburger_close_escape():
-        r = d.tool('key_press', {'windowName': WIN, 'keys': 'Escape'})
-        time.sleep(0.3)
-        ok = 'Pressed' in r or 'pressed' in r
-        return ok, ''
-    tests.append(('close menu with Escape', test_hamburger_close_escape))
-
-    # ── Phase 6: Menu item interaction ───────────────────────────────────
-
-    def test_menu_all_processes():
-        # Open menu via F10 (more reliable than clicking ☰ glyph)
-        d.tool('key_press', {'windowName': WIN, 'keys': 'F10'})
-        time.sleep(0.6)
-        # Navigate with arrow keys: first item is usually the process filter
-        r = d.tool('key_press', {'windowName': WIN, 'keys': 'Down Down Return'})
-        time.sleep(0.5)
-        d.screenshot('09_all_processes')
-        # Verify we're still on Processes tab (menu didn't break anything)
-        verify = d.tool('read_screen_text', {'windowName': WIN})
-        ok = 'Process' in verify or 'CPU' in verify or 'Memory' in verify
-        return ok, '' if ok else verify[:60]
-    tests.append(('menu → navigate with keyboard', test_menu_all_processes))
-
-    def test_menu_preferences():
-        d.tool('key_press', {'windowName': WIN, 'keys': 'F10'})
-        time.sleep(0.6)
-        # Navigate to Preferences (typically near bottom of menu)
-        for _ in range(6):
-            d.tool('key_press', {'windowName': WIN, 'keys': 'Down'})
-            time.sleep(0.1)
-        d.screenshot('10_menu_navigated')
-        # Close without selecting
+    def _open_hamburger():
+        """Open hamburger menu reliably — dismiss first, then F10."""
         d.tool('key_press', {'windowName': WIN, 'keys': 'Escape'})
         time.sleep(0.3)
+        d.tool('key_press', {'windowName': WIN, 'keys': 'F10'})
+        time.sleep(0.8)
+
+    def _dismiss():
+        """Dismiss any open menu/dialog."""
+        # Send Escape to whatever has focus (might be a dialog)
+        d.tool('key_press', {'keys': 'Escape'})
+        time.sleep(0.2)
+        # Also focus main window and send Escape (for menus)
+        d.tool('key_press', {'windowName': WIN, 'keys': 'Escape'})
+        time.sleep(0.3)
+
+    def test_hamburger_open():
+        _open_hamburger()
+        d.screenshot('08_hamburger_open')
+        # Click Refresh via OCR (menu text visible in window screenshot)
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Refresh'})
+        time.sleep(0.3)
+        ok = 'Clicked' in r
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click Refresh', test_hamburger_open))
+
+    def test_menu_active_processes():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Active Processes'})
+        time.sleep(0.3)
+        d.screenshot('09_active_processes')
+        ok = 'Clicked' in r
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click Active Processes', test_menu_active_processes))
+
+    def test_menu_all_processes():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'All Processes'})
+        time.sleep(0.3)
+        d.screenshot('10_all_processes')
+        ok = 'Clicked' in r
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click All Processes', test_menu_all_processes))
+
+    def test_menu_my_processes():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'My Processes'})
+        time.sleep(0.3)
+        d.screenshot('11_my_processes')
+        ok = 'Clicked' in r
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click My Processes', test_menu_my_processes))
+
+    def test_menu_show_dependencies():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Show Dependencies'})
+        time.sleep(0.3)
+        d.screenshot('12_show_deps')
+        ok = 'Clicked' in r
+        # Toggle it back off
+        _open_hamburger()
+        d.tool('click_text', {'windowName': WIN, 'text': 'Show Dependencies'})
+        time.sleep(0.3)
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click Show Dependencies', test_menu_show_dependencies))
+
+    def test_menu_search_open_files():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Search for Open Files'})
+        time.sleep(0.5)
+        d.screenshot('13_search_open_files')
+        ok = 'Clicked' in r
+        # This opens a dialog — close it
+        _dismiss()
+        time.sleep(0.2)
+        _dismiss()  # might need double escape
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click Search for Open Files', test_menu_search_open_files))
+
+    def test_menu_preferences():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Preferences'})
+        time.sleep(0.5)
+        d.screenshot('14_preferences')
+        ok = 'Clicked' in r
+        _dismiss()
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click Preferences', test_menu_preferences))
+
+    def test_menu_keyboard_shortcuts():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Keyboard Shortcuts'})
+        time.sleep(0.5)
+        d.screenshot('15_keyboard_shortcuts')
+        ok = 'Clicked' in r
+        _dismiss()
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click Keyboard Shortcuts', test_menu_keyboard_shortcuts))
+
+    def test_menu_about():
+        _open_hamburger()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'About System Monitor'})
+        time.sleep(0.5)
+        d.screenshot('16_about')
+        ok = 'Clicked' in r
+        _dismiss()
+        return ok, r[:80] if not ok else ''
+    tests.append(('hamburger: click About System Monitor', test_menu_about))
+
+    # ── Phase 6: Right-click context menu items ──────────────────────────
+
+    def _right_click_process():
+        """Right-click on a process row and wait for context menu."""
+        d.tool('key_press', {'windowName': WIN, 'keys': 'Escape'})
+        time.sleep(0.3)
+        d.tool('click', {'windowName': WIN, 'x': 300, 'y': 300, 'button': 'right'})
+        time.sleep(1.0)
+
+    def test_ctx_properties():
+        _right_click_process()
+        d.screenshot('17_ctx_menu')
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Properties'})
+        time.sleep(0.5)
+        d.screenshot('18_ctx_properties')
+        ok = 'Clicked' in r
+        _dismiss()  # close properties dialog
+        return ok, r[:80] if not ok else ''
+    tests.append(('right-click: Properties', test_ctx_properties))
+
+    def test_ctx_memory_maps():
+        _right_click_process()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Memory Maps'})
+        time.sleep(0.5)
+        d.screenshot('19_ctx_memory_maps')
+        ok = 'Clicked' in r
+        _dismiss()
+        return ok, r[:80] if not ok else ''
+    tests.append(('right-click: Memory Maps', test_ctx_memory_maps))
+
+    def test_ctx_open_files():
+        _right_click_process()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Open Files'})
+        time.sleep(0.5)
+        d.screenshot('20_ctx_open_files')
+        ok = 'Clicked' in r
+        _dismiss()
+        return ok, r[:80] if not ok else ''
+    tests.append(('right-click: Open Files', test_ctx_open_files))
+
+    def test_ctx_change_priority():
+        _right_click_process()
+        r = d.tool('click_text', {'windowName': WIN, 'text': 'Change Priority'})
+        time.sleep(0.5)
+        d.screenshot('21_ctx_change_priority')
+        ok = 'Clicked' in r
+        _dismiss()  # close submenu
+        _dismiss()  # close context menu if still open
+        return ok, r[:80] if not ok else ''
+    tests.append(('right-click: Change Priority', test_ctx_change_priority))
+
+    def test_ctx_dismiss():
+        _right_click_process()
+        _dismiss()
+        time.sleep(0.2)
         ok = True
         return ok, ''
-    tests.append(('menu → keyboard navigation + close', test_menu_preferences))
+    tests.append(('right-click: dismiss with Escape', test_ctx_dismiss))
+
+    # ── Phase 6b: Gear button (lower-right) ──────────────────────────────
+
+    def test_gear_button():
+        # The gear button is at the lower-right corner of the window.
+        # Click near bottom-right — it's a small icon button.
+        geom = d.tool('get_window_geometry', {'windowName': WIN})
+        # Click at window-relative coords near bottom-right
+        # Window is ~1504 wide, ~1104 tall, gear is at far bottom-right
+        r = d.tool('click', {'windowName': WIN, 'x': 1470, 'y': 1070})
+        time.sleep(0.5)
+        d.screenshot('22_gear_clicked')
+        ok = 'Clicked' in r
+        _dismiss()
+        return ok, r[:60]
+    tests.append(('gear button (lower-right)', test_gear_button))
 
     # ── Phase 7: Coordinate-based click ──────────────────────────────────
 
     def test_coordinate_click():
-        # Click the center of the window (should be in process list area)
-        geom = d.tool('get_window_geometry', {'windowName': WIN})
-        # Parse geometry - format varies
         r = d.tool('click', {'windowName': WIN, 'x': 400, 'y': 300})
         time.sleep(0.3)
         ok = 'Clicked' in r or 'clicked' in r
-        d.screenshot('11_coord_click')
+        d.screenshot('23_coord_click')
         return ok, r[:60]
     tests.append(('click at coordinates (400, 300)', test_coordinate_click))
 
@@ -317,7 +448,7 @@ def make_tests(d: DeskpalClient):
     def test_right_click():
         r = d.tool('click', {'windowName': WIN, 'x': 400, 'y': 300, 'button': 'right'})
         time.sleep(0.5)
-        d.screenshot('12_right_click')
+        d.screenshot('24_right_click')
         ok = 'Clicked' in r or 'clicked' in r
         # Dismiss context menu
         d.tool('key_press', {'windowName': WIN, 'keys': 'Escape'})
@@ -330,7 +461,7 @@ def make_tests(d: DeskpalClient):
     def test_sort_memory():
         r = d.tool('click_text', {'windowName': WIN, 'text': 'Memory'})
         time.sleep(0.5)
-        d.screenshot('13_sorted_memory')
+        d.screenshot('25_sorted_memory')
         ok = 'Clicked' in r or 'clicked' in r
         return ok, r[:60] if not ok else ''
     tests.append(('click_text → sort by Memory column', test_sort_memory))
@@ -341,7 +472,7 @@ def make_tests(d: DeskpalClient):
         if 'not found' in r.lower():
             r = d.tool('click_text', {'windowName': WIN, 'text': 'CPU'})
         time.sleep(0.5)
-        d.screenshot('14_sorted_cpu')
+        d.screenshot('26_sorted_cpu')
         ok = 'Clicked' in r or 'clicked' in r
         return ok, r[:60] if not ok else ''
     tests.append(('click_text → sort by CPU column', test_sort_cpu))
@@ -375,7 +506,7 @@ def make_tests(d: DeskpalClient):
     def test_resize():
         r = d.tool('resize_window', {'windowName': WIN, 'width': 1200, 'height': 900})
         time.sleep(0.5)
-        d.screenshot('15_resized')
+        d.screenshot('27_resized')
         ok = 'Resized' in r or 'resized' in r or 'resize' in r.lower()
         return ok, r[:60]
     tests.append(('resize_window to 1200x900', test_resize))
@@ -394,7 +525,7 @@ def make_tests(d: DeskpalClient):
         for tab in tabs:
             d.tool('click_text', {'windowName': WIN, 'text': tab})
             time.sleep(0.3)
-        d.screenshot('16_rapid_tabs_done')
+        d.screenshot('28_rapid_tabs_done')
         verify = d.tool('read_screen_text', {'windowName': WIN})
         ok = 'Process' in verify
         return ok, ''
@@ -403,7 +534,7 @@ def make_tests(d: DeskpalClient):
     # ── Phase 14: Final state ────────────────────────────────────────────
 
     def test_final_screenshot():
-        path = d.screenshot('17_final')
+        path = d.screenshot('29_final')
         ok = path is not None and os.path.exists(path)
         return ok, path or 'no image'
     tests.append(('final screenshot', test_final_screenshot))

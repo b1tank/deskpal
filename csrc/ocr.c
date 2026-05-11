@@ -327,16 +327,42 @@ OcrMatch *ocr_find_text(const OcrResult *result, const char *search_text,
 		}
 
 		for (int i = 0; i <= result->count - nwords; i++) {
+			if (!str_contains_ci(result->boxes[i].text, words[0]))
+				continue;
+
+			/* Found first word — find remaining words by scanning
+			 * forward for boxes on the same line, to the right.
+			 * This handles cases where dedup inserts extra boxes
+			 * between the actual word sequence (e.g. "ShowDependencies"
+			 * sitting between "Show" and "Dependencies"). */
 			int match = 1;
-			for (int j = 0; j < nwords; j++) {
-				if (!str_contains_ci(result->boxes[i + j].text, words[j])) {
-					match = 0;
-					break;
+			int last_idx = i;
+			for (int j = 1; j < nwords; j++) {
+				int found = 0;
+				const OcrBox *prev = &result->boxes[last_idx];
+				int prev_cy = prev->y + prev->height / 2;
+				for (int k = last_idx + 1; k < result->count; k++) {
+					const OcrBox *cur = &result->boxes[k];
+					int cur_cy = cur->y + cur->height / 2;
+					/* Must be on same line (within 20px) and to the right */
+					if (abs(cur_cy - prev_cy) > 20) {
+						/* Past this line — stop searching */
+						if (cur_cy - prev_cy > 20) break;
+						continue;
+					}
+					if (cur->x < prev->x) continue;
+					if (str_contains_ci(cur->text, words[j])) {
+						last_idx = k;
+						found = 1;
+						break;
+					}
 				}
+				if (!found) { match = 0; break; }
 			}
+
 			if (match) {
 				const OcrBox *first = &result->boxes[i];
-				const OcrBox *last = &result->boxes[i + nwords - 1];
+				const OcrBox *last = &result->boxes[last_idx];
 				int x = first->x;
 				int y = first->y < last->y ? first->y : last->y;
 				int x2 = last->x + last->width;

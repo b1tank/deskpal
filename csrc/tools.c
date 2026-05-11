@@ -12,6 +12,7 @@
 #include "x11.h"
 #include "screenshot.h"
 #include "ocr.h"
+#include "uinput.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +53,20 @@ static int json_bool(const cJSON *obj, const char *key, int def)
 	return def;
 }
 
+/* Parse button value: accepts number (1,2,3) or string ("left","right","middle"). */
+static int json_button(const cJSON *obj, const char *key, int def)
+{
+	const cJSON *item = cJSON_GetObjectItem(obj, key);
+	if (!item) return def;
+	if (cJSON_IsNumber(item)) return item->valueint;
+	if (cJSON_IsString(item) && item->valuestring) {
+		if (strcmp(item->valuestring, "right") == 0) return 3;
+		if (strcmp(item->valuestring, "middle") == 0) return 2;
+		if (strcmp(item->valuestring, "left") == 0) return 1;
+	}
+	return def;
+}
+
 /* Resolve windowId or windowName to a window ID. Returns 0 if not found. */
 static unsigned long resolve_window(const cJSON *params)
 {
@@ -82,6 +97,28 @@ cJSON *tool_screenshot(const cJSON *params)
 
 	size_t png_len = 0;
 	uint8_t *png = screenshot_capture_png(target, &png_len);
+
+	if (!png && full_screen) {
+		/* XCB root capture fails on Xwayland — use gnome-screenshot/grim */
+		char tmp[64];
+		snprintf(tmp, sizeof(tmp), "/tmp/deskpal_ss_%d.png", getpid());
+		char cmd[256];
+		snprintf(cmd, sizeof(cmd),
+			"gnome-screenshot -f \"%s\" 2>/dev/null"
+			" || grim \"%s\" 2>/dev/null", tmp, tmp);
+		system(cmd);
+		FILE *f = fopen(tmp, "rb");
+		if (f) {
+			fseek(f, 0, SEEK_END);
+			png_len = ftell(f);
+			fseek(f, 0, SEEK_SET);
+			png = malloc(png_len);
+			if (png) fread(png, 1, png_len, f);
+			fclose(f);
+			unlink(tmp);
+		}
+	}
+
 	if (!png) {
 		return mcp_text_result("Screenshot failed: could not capture window");
 	}
@@ -175,7 +212,7 @@ cJSON *tool_click(const cJSON *params)
 	unsigned long wid = resolve_window(params);
 	int x = json_int(params, "x", 0);
 	int y = json_int(params, "y", 0);
-	int button = json_int(params, "button", 1);
+	int button = json_button(params, "button", 1);
 	int dbl = json_bool(params, "doubleClick", 0);
 
 	unsigned long target = wid ? wid : x11_get_active_window();
@@ -191,13 +228,226 @@ cJSON *tool_click(const cJSON *params)
 	 * gives the window compositor-level focus automatically. */
 	x11_mouse_move(abs_x, abs_y);
 	usleep_ms(10);
-	x11_click(button, dbl ? 2 : 1);
+
+	if (button != 1 && uinput_available()) {
+		/* On GNOME Wayland, uinput ABS right-click doesn't trigger
+		 * GTK context menus. Use xdotool for the full move+click
+		 * to keep X11 cursor in sync with the click. */
+		char cmd[128];
+		snprintf(cmd, sizeof(cmd),
+			"xdotool mousemove --window %lu %d %d && xdotool click %d",
+			target, x, y, button);
+		if (dbl) {
+			char cmd2[280];
+			snprintf(cmd2, sizeof(cmd2), "%s && %s", cmd, cmd);
+			system(cmd2);
+		} else {
+			system(cmd);
+		}
+	} else {
+		x11_click(button, dbl ? 2 : 1);
+	}
 
 	char buf[128];
 	snprintf(buf, sizeof(buf),
 		"Clicked (%d, %d) in window %lu [abs: %d, %d]",
 		x, y, target, abs_x, abs_y);
 	return mcp_text_result(buf);
+}
+
+/* ── OCR helper: screenshot → tesseract → OcrResult ──────────────────────── */
+
+/* Run OCR on a screenshot of the given window (0 = full screen).
+ * Returns the number of word boxes found. Caller must ocr_result_free(). */
+static int ocr_screenshot(unsigned long wid, OcrResult *out)
+{
+	out->boxes = NULL;
+	out->count = 0;
+	out->capacity = 0;
+
+	char tmp_png[64];
+	snprintf(tmp_png, sizeof(tmp_png), "/tmp/deskpal_ocr_%d.png", getpid());
+
+	size_t png_len = 0;
+	uint8_t *png_data = screenshot_capture_png(wid, &png_len);
+
+	if (!png_data && wid == 0) {
+		/* XCB root capture fails on Xwayland — fall back to external tools */
+		char cmd[256];
+		snprintf(cmd, sizeof(cmd),
+			"gnome-screenshot -f \"%s\" 2>/dev/null"
+			" || grim \"%s\" 2>/dev/null",
+			tmp_png, tmp_png);
+		system(cmd);
+		/* Check if the file was created */
+		FILE *f = fopen(tmp_png, "rb");
+		if (f) { fclose(f); goto do_ocr; }
+		return 0;
+	}
+
+	if (!png_data) return 0;
+
+	{
+		FILE *f = fopen(tmp_png, "wb");
+		if (!f) { free(png_data); return 0; }
+		fwrite(png_data, 1, png_len, f);
+		fclose(f);
+		free(png_data);
+	}
+
+do_ocr:;
+
+	/* Preprocess: scale up 2x + invert for dark themes.
+	 * Larger text gives tesseract much better accuracy. */
+	char preproc_png[80];
+	snprintf(preproc_png, sizeof(preproc_png), "/tmp/deskpal_ocr_pre_%d.png", getpid());
+	char preproc_cmd[512];
+
+	/* Scale up the original image 2x for better OCR accuracy */
+	char scaled_png[80];
+	snprintf(scaled_png, sizeof(scaled_png), "/tmp/deskpal_ocr_2x_%d.png", getpid());
+	snprintf(preproc_cmd, sizeof(preproc_cmd),
+		"convert \"%s\" -resize 200%% \"%s\" 2>/dev/null",
+		tmp_png, scaled_png);
+	system(preproc_cmd);
+	/* Use scaled image for OCR, fall back to original if scaling fails */
+	{
+		FILE *ft = fopen(scaled_png, "rb");
+		if (ft) {
+			fclose(ft);
+			unlink(tmp_png);
+			/* Rename is fine since same filesystem */
+			rename(scaled_png, tmp_png);
+		}
+	}
+
+	snprintf(preproc_cmd, sizeof(preproc_cmd),
+		"convert \"%s\" -negate -colorspace Gray -sharpen 0x1 \"%s\" 2>/dev/null",
+		tmp_png, preproc_png);
+	system(preproc_cmd);
+
+	/* Run tesseract on both original and inverted */
+	char cmd[256];
+	char tsv_base[64], tsv_base2[64];
+	snprintf(tsv_base, sizeof(tsv_base), "/tmp/deskpal_tsv_%d", getpid());
+	snprintf(tsv_base2, sizeof(tsv_base2), "/tmp/deskpal_tsv2_%d", getpid());
+
+	snprintf(cmd, sizeof(cmd),
+		"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null", tmp_png, tsv_base);
+	int rc = system(cmd);
+
+	snprintf(cmd, sizeof(cmd),
+		"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null", preproc_png, tsv_base2);
+	int rc2 = system(cmd);
+	unlink(tmp_png);
+	unlink(preproc_png);
+
+	if (rc != 0 && rc2 != 0) return 0;
+
+	char tsv_file[80], tsv_file2[80];
+	snprintf(tsv_file, sizeof(tsv_file), "%s.tsv", tsv_base);
+	snprintf(tsv_file2, sizeof(tsv_file2), "%s.tsv", tsv_base2);
+
+	const char *tsv_files[] = { tsv_file, tsv_file2, NULL };
+	for (int fi = 0; tsv_files[fi]; fi++) {
+		FILE *ft = fopen(tsv_files[fi], "r");
+		if (!ft) continue;
+
+		char line[512];
+		int line_no = 0;
+		while (fgets(line, sizeof(line), ft)) {
+			line_no++;
+			if (line_no == 1) continue;
+
+			char *cols[12];
+			int ncols = 0;
+			char *p = line;
+			while (ncols < 12 && *p) {
+				cols[ncols++] = p;
+				char *tab = strchr(p, '\t');
+				if (tab) { *tab = '\0'; p = tab + 1; }
+				else {
+					size_t len = strlen(p);
+					if (len > 0 && p[len - 1] == '\n') p[len - 1] = '\0';
+					break;
+				}
+			}
+			if (ncols < 12) continue;
+			int conf = atoi(cols[10]);
+			char *word = cols[11];
+			if (conf < 30 || !word[0] || (word[0] == ' ' && word[1] == '\0'))
+				continue;
+
+			OcrBox box;
+			int len = strlen(word);
+			if (len >= (int)sizeof(box.text)) len = (int)sizeof(box.text) - 1;
+			memcpy(box.text, word, len);
+			box.text[len] = '\0';
+			while (len > 0 && (box.text[len-1] == ' ' || box.text[len-1] == '\n' ||
+			       box.text[len-1] == '\r'))
+				box.text[--len] = '\0';
+			if (len == 0) continue;
+
+			box.x = atoi(cols[6]) / 2;  /* halve: image was scaled 2x */
+			box.y = atoi(cols[7]) / 2;
+			box.width = atoi(cols[8]) / 2;
+			box.height = atoi(cols[9]) / 2;
+			box.confidence = conf;
+
+			if (out->count >= out->capacity) {
+				int new_cap = out->capacity ? out->capacity * 2 : 64;
+				OcrBox *tmp = realloc(out->boxes, new_cap * sizeof(OcrBox));
+				if (!tmp) break;
+				out->boxes = tmp;
+				out->capacity = new_cap;
+			}
+			out->boxes[out->count++] = box;
+		}
+		fclose(ft);
+	}
+	unlink(tsv_file);
+	unlink(tsv_file2);
+
+	/* Deduplicate overlapping boxes from normal + inverted runs */
+	for (int i = 0; i < out->count; i++) {
+		for (int j = i + 1; j < out->count; j++) {
+			OcrBox *a = &out->boxes[i];
+			OcrBox *b = &out->boxes[j];
+			if (strcasecmp(a->text, b->text) == 0 &&
+			    abs(a->x - b->x) < 20 && abs(a->y - b->y) < 20) {
+				if (b->confidence > a->confidence) *a = *b;
+				memmove(b, b + 1, (out->count - j - 1) * sizeof(OcrBox));
+				out->count--;
+				j--;
+			}
+		}
+	}
+
+	/* Sort boxes by position (y first, then x) so multi-word matching
+	 * works correctly after merging normal + inverted OCR results */
+	for (int i = 0; i < out->count - 1; i++) {
+		for (int j = i + 1; j < out->count; j++) {
+			OcrBox *a = &out->boxes[i];
+			OcrBox *b = &out->boxes[j];
+			/* Same line: within 15px vertically */
+			int ay = a->y + a->height / 2;
+			int by = b->y + b->height / 2;
+			int swap = 0;
+			if (abs(ay - by) <= 15) {
+				/* Same line — sort by x */
+				if (b->x < a->x) swap = 1;
+			} else if (by < ay) {
+				swap = 1;
+			}
+			if (swap) {
+				OcrBox tmp = *a;
+				*a = *b;
+				*b = tmp;
+			}
+		}
+	}
+
+	return out->count;
 }
 
 /* ── click_text ──────────────────────────────────────────────────────────── */
@@ -211,246 +461,246 @@ cJSON *tool_click_text(const cJSON *params)
 
 	const char *text = json_str(params, "text", "");
 	int occurrence = json_int(params, "occurrence", 1);
-	int button = json_int(params, "button", 1);
+	int button = json_button(params, "button", 1);
 
 	unsigned long wid = resolve_window(params);
 	unsigned long target = wid ? wid : x11_get_active_window();
 
-	/* Capture window pixels */
 	WindowInfo info;
 	if (x11_get_window_info(target, &info) != 0) {
 		return mcp_text_result("Could not get window info");
 	}
-
-	size_t png_len = 0;
-	uint8_t *png_data = screenshot_capture_png(target, &png_len);
-	if (!png_data) {
-		return mcp_text_result("Screenshot failed for OCR");
-	}
-
-	/* We need raw pixels for tesseract.
-	 * Re-capture as raw BGRA via XCB. */
-	free(png_data);
-
-	/* Direct XCB capture to get raw pixels */
-	/* We'll use the xcb_capture function indirectly through screenshot.
-	 * For now, use the external approach: capture + decode.
-	 * TODO: expose raw pixel capture from screenshot.c */
-
-	/* Workaround: capture screenshot, write to /tmp, use tesseract CLI */
-	png_data = screenshot_capture_png(target, &png_len);
-	if (!png_data) {
-		return mcp_text_result("Screenshot capture failed");
-	}
-
-	/* Write PNG to temp file, use tesseract CLI for OCR.
-	 * This is a temporary workaround until we add PNG decode. */
-	char tmp_png[64];
-	snprintf(tmp_png, sizeof(tmp_png), "/tmp/deskpal_ocr_%d.png", getpid());
-	FILE *f = fopen(tmp_png, "wb");
-	if (!f) {
-		free(png_data);
-		return mcp_text_result("Failed to write temp file");
-	}
-	fwrite(png_data, 1, png_len, f);
-	fclose(f);
-	free(png_data);
-
-	/* Preprocess image for better OCR on dark themes:
-	 * auto-detect dark backgrounds and invert colors */
-	char preproc_png[80];
-	snprintf(preproc_png, sizeof(preproc_png), "/tmp/deskpal_ocr_pre_%d.png", getpid());
-	char preproc_cmd[512];
-	/* Negate (invert), convert to grayscale, sharpen slightly for clean OCR.
-	 * This makes light-on-dark text become dark-on-light — what tesseract expects. */
-	snprintf(preproc_cmd, sizeof(preproc_cmd),
-		"convert \"%s\" -negate -colorspace Gray -sharpen 0x1 \"%s\" 2>/dev/null",
-		tmp_png, preproc_png);
-	system(preproc_cmd);
-
-	/* Run tesseract on BOTH original and preprocessed, merge results.
-	 * This handles mixed UIs (dark header + light content). */
-	char cmd[256];
-	char tsv_base[64];
-	char tsv_base2[64];
-	snprintf(tsv_base, sizeof(tsv_base), "/tmp/deskpal_tsv_%d", getpid());
-	snprintf(tsv_base2, sizeof(tsv_base2), "/tmp/deskpal_tsv2_%d", getpid());
-
-	snprintf(cmd, sizeof(cmd),
-		"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null", tmp_png, tsv_base);
-	int rc = system(cmd);
-
-	/* Also run on inverted image */
-	snprintf(cmd, sizeof(cmd),
-		"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null", preproc_png, tsv_base2);
-	int rc2 = system(cmd);
-	unlink(tmp_png);
-	unlink(preproc_png);
-
-	if (rc != 0 && rc2 != 0) {
-		return mcp_text_result("Tesseract OCR failed");
-	}
-
-	/* Parse TSV output — merge results from both runs */
-	char tsv_file[80];
-	char tsv_file2[80];
-	snprintf(tsv_file, sizeof(tsv_file), "%s.tsv", tsv_base);
-	snprintf(tsv_file2, sizeof(tsv_file2), "%s.tsv", tsv_base2);
-
-	OcrResult ocr_result = { .boxes = NULL, .count = 0, .capacity = 0 };
-
-	/* Parse TSV helper: process one TSV file into ocr_result */
-	const char *tsv_files[] = { tsv_file, tsv_file2, NULL };
-	for (int fi = 0; tsv_files[fi]; fi++) {
-		f = fopen(tsv_files[fi], "r");
-		if (!f) continue;
-
-	char line[512];
-	int line_no = 0;
-	while (fgets(line, sizeof(line), f)) {
-		line_no++;
-		if (line_no == 1) continue; /* skip header */
-
-		/* TSV columns: level, page, block, par, line, word,
-		 *              left, top, width, height, conf, text */
-		char *cols[12];
-		int ncols = 0;
-		char *p = line;
-		while (ncols < 12 && *p) {
-			cols[ncols++] = p;
-			char *tab = strchr(p, '\t');
-			if (tab) { *tab = '\0'; p = tab + 1; }
-			else {
-				/* Trim newline */
-				size_t len = strlen(p);
-				if (len > 0 && p[len - 1] == '\n') p[len - 1] = '\0';
-				break;
-			}
-		}
-
-		if (ncols < 12) continue;
-		int conf = atoi(cols[10]);
-		char *word = cols[11];
-
-		/* Skip low confidence and empty */
-		if (conf < 30 || !word[0] || (word[0] == ' ' && word[1] == '\0'))
-			continue;
-
-		OcrBox box;
-		int len = strlen(word);
-		if (len >= (int)sizeof(box.text)) len = (int)sizeof(box.text) - 1;
-		memcpy(box.text, word, len);
-		box.text[len] = '\0';
-		/* Trim trailing whitespace */
-		while (len > 0 && (box.text[len-1] == ' ' || box.text[len-1] == '\n' ||
-		       box.text[len-1] == '\r'))
-			box.text[--len] = '\0';
-
-		if (len == 0) continue;
-
-		box.x = atoi(cols[6]);
-		box.y = atoi(cols[7]);
-		box.width = atoi(cols[8]);
-		box.height = atoi(cols[9]);
-		box.confidence = conf;
-
-		/* Push to result */
-		if (ocr_result.count >= ocr_result.capacity) {
-			int new_cap = ocr_result.capacity ? ocr_result.capacity * 2 : 64;
-			OcrBox *tmp = realloc(ocr_result.boxes, new_cap * sizeof(OcrBox));
-			if (!tmp) break;
-			ocr_result.boxes = tmp;
-			ocr_result.capacity = new_cap;
-		}
-		ocr_result.boxes[ocr_result.count++] = box;
-	}
-	fclose(f);
-	} /* end for each TSV file */
-	unlink(tsv_file);
-	unlink(tsv_file2);
-
-	/* Deduplicate: remove boxes that overlap significantly.
-	 * When both normal and inverted OCR find the same word, keep
-	 * the higher-confidence one. */
-	for (int i = 0; i < ocr_result.count; i++) {
-		for (int j = i + 1; j < ocr_result.count; j++) {
-			OcrBox *a = &ocr_result.boxes[i];
-			OcrBox *b = &ocr_result.boxes[j];
-			/* Check if boxes overlap (same text at similar position) */
-			if (strcasecmp(a->text, b->text) == 0 &&
-			    abs(a->x - b->x) < 20 && abs(a->y - b->y) < 20) {
-				/* Keep higher confidence, remove other */
-				if (b->confidence > a->confidence) {
-					*a = *b;
-				}
-				/* Remove b by shifting */
-				memmove(b, b + 1,
-				        (ocr_result.count - j - 1) * sizeof(OcrBox));
-				ocr_result.count--;
-				j--;
-			}
-		}
-	}
-
-	if (ocr_result.count == 0) {
-		ocr_result_free(&ocr_result);
-		return mcp_text_result("OCR found no text in window");
-	}
-
-	/* Find the text */
-	int match_count = 0;
-	OcrMatch *matches = ocr_find_text(&ocr_result, text, &match_count);
-
-	if (match_count == 0) {
-		/* Show what was found for debugging */
-		char visible[2048];
-		int vpos = 0;
-		vpos += snprintf(visible + vpos, sizeof(visible) - vpos,
-			"Text \"%s\" not found on screen.\n\nVisible text: ", text);
-		for (int i = 0; i < ocr_result.count && vpos < (int)sizeof(visible) - 64; i++) {
-			if (i > 0) vpos += snprintf(visible + vpos, sizeof(visible) - vpos, ", ");
-			vpos += snprintf(visible + vpos, sizeof(visible) - vpos,
-				"%s", ocr_result.boxes[i].text);
-		}
-		ocr_result_free(&ocr_result);
-		return mcp_text_result(visible);
-	}
-
-	int idx = occurrence - 1;
-	if (idx < 0) idx = 0;
-	if (idx >= match_count) idx = match_count - 1;
-
-	OcrMatch match = matches[idx];
-	free(matches);
 
 	/* Get offset from params */
 	const cJSON *offset = cJSON_GetObjectItem(params, "offset");
 	int off_x = offset ? json_int(offset, "x", 0) : 0;
 	int off_y = offset ? json_int(offset, "y", 0) : 0;
 
-	/* Click the center of the matched text */
-	int click_x = match.x + match.width / 2 + off_x;
-	int click_y = match.y + match.height / 2 + off_y;
-	int abs_x = info.x + click_x;
-	int abs_y = info.y + click_y;
+	/* ── Pass 1: OCR on the target window ──────────────────────────────── */
+	OcrResult ocr_result;
+	ocr_screenshot(target, &ocr_result);
 
-	x11_mouse_move(abs_x, abs_y);
-	usleep_ms(10);
-	x11_click(button, 1);
+	int match_count = 0;
+	OcrMatch *matches = NULL;
 
-	char buf[256];
-	snprintf(buf, sizeof(buf),
-		"Clicked \"%s\" (occurrence %d/%d) at (%d, %d) in window %lu\n"
-		"Text bbox: %d,%d %dx%d",
-		text, idx + 1, match_count, click_x, click_y, target,
-		match.x, match.y, match.width, match.height);
+	if (ocr_result.count > 0) {
+		matches = ocr_find_text(&ocr_result, text, &match_count);
+	}
 
+	if (match_count > 0) {
+		int idx = occurrence - 1;
+		if (idx < 0) idx = 0;
+		if (idx >= match_count) idx = match_count - 1;
+		OcrMatch match = matches[idx];
+		free(matches);
+
+		int click_x = match.x + match.width / 2 + off_x;
+		int click_y = match.y + match.height / 2 + off_y;
+		int abs_x = info.x + click_x;
+		int abs_y = info.y + click_y;
+
+		x11_mouse_move(abs_x, abs_y);
+		usleep_ms(10);
+		x11_click(button, 1);
+
+		char buf[256];
+		snprintf(buf, sizeof(buf),
+			"Clicked \"%s\" (occurrence %d/%d) at (%d, %d) in window %lu\n"
+			"Text bbox: %d,%d %dx%d",
+			text, idx + 1, match_count, click_x, click_y, target,
+			match.x, match.y, match.width, match.height);
+		ocr_result_free(&ocr_result);
+		return mcp_text_result(buf);
+	}
+
+	/* ── Pass 2: text not in window — capture area around window ─────── */
+	/* Popup menus, context menus, dropdowns render as separate windows.
+	 * Crop a region around the target window to focus OCR on relevant area. */
 	ocr_result_free(&ocr_result);
-	return mcp_text_result(buf);
+
+	/* Take a full-screen screenshot, then crop to window region + margin */
+	char ss_png[64], crop_png[64];
+	snprintf(ss_png, sizeof(ss_png), "/tmp/deskpal_ss_%d.png", getpid());
+	snprintf(crop_png, sizeof(crop_png), "/tmp/deskpal_crop_%d.png", getpid());
+
+	{
+		char cmd[256];
+		snprintf(cmd, sizeof(cmd),
+			"gnome-screenshot -f \"%s\" 2>/dev/null"
+			" || grim \"%s\" 2>/dev/null", ss_png, ss_png);
+		system(cmd);
+	}
+
+	/* Crop to window area + 200px margin on each side */
+	int margin = 200;
+	int crop_x = info.x > margin ? info.x - margin : 0;
+	int crop_y = info.y > margin ? info.y - margin : 0;
+	int crop_w = info.width + 2 * margin;
+	int crop_h = info.height + 2 * margin;
+
+	{
+		char cmd[512];
+		snprintf(cmd, sizeof(cmd),
+			"convert \"%s\" -crop %dx%d+%d+%d +repage -resize 200%% \"%s\" 2>/dev/null",
+			ss_png, crop_w, crop_h, crop_x, crop_y, crop_png);
+		system(cmd);
+	}
+	unlink(ss_png);
+
+	/* OCR the cropped region — rename to deskpal_ocr_ so ocr_screenshot-like
+	 * preprocessing works. We do it manually here. */
+	OcrResult screen_ocr = { .boxes = NULL, .count = 0, .capacity = 0 };
+	{
+		/* Invert for dark theme */
+		char inv_png[80];
+		snprintf(inv_png, sizeof(inv_png), "/tmp/deskpal_crop_inv_%d.png", getpid());
+		char cmd[512];
+		snprintf(cmd, sizeof(cmd),
+			"convert \"%s\" -negate -colorspace Gray -sharpen 0x1 \"%s\" 2>/dev/null",
+			crop_png, inv_png);
+		system(cmd);
+
+		/* Run tesseract on both */
+		char tsv1[64], tsv2[64];
+		snprintf(tsv1, sizeof(tsv1), "/tmp/deskpal_ctsv_%d", getpid());
+		snprintf(tsv2, sizeof(tsv2), "/tmp/deskpal_ctsv2_%d", getpid());
+
+		snprintf(cmd, sizeof(cmd),
+			"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null",
+			crop_png, tsv1);
+		system(cmd);
+		snprintf(cmd, sizeof(cmd),
+			"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null",
+			inv_png, tsv2);
+		system(cmd);
+		unlink(crop_png);
+		unlink(inv_png);
+
+		char tsv1f[80], tsv2f[80];
+		snprintf(tsv1f, sizeof(tsv1f), "%s.tsv", tsv1);
+		snprintf(tsv2f, sizeof(tsv2f), "%s.tsv", tsv2);
+
+		const char *files[] = { tsv1f, tsv2f, NULL };
+		for (int fi = 0; files[fi]; fi++) {
+			FILE *ft = fopen(files[fi], "r");
+			if (!ft) continue;
+			char line[512];
+			int line_no = 0;
+			while (fgets(line, sizeof(line), ft)) {
+				line_no++;
+				if (line_no == 1) continue;
+				char *cols[12];
+				int ncols = 0;
+				char *p = line;
+				while (ncols < 12 && *p) {
+					cols[ncols++] = p;
+					char *tab = strchr(p, '\t');
+					if (tab) { *tab = '\0'; p = tab + 1; }
+					else { size_t l = strlen(p); if (l > 0 && p[l-1]=='\n') p[l-1]='\0'; break; }
+				}
+				if (ncols < 12) continue;
+				int conf = atoi(cols[10]);
+				char *word = cols[11];
+				if (conf < 30 || !word[0] || (word[0]==' ' && !word[1])) continue;
+				OcrBox box;
+				int len = strlen(word);
+				if (len >= (int)sizeof(box.text)) len = (int)sizeof(box.text) - 1;
+				memcpy(box.text, word, len);
+				box.text[len] = '\0';
+				while (len > 0 && (box.text[len-1]==' '||box.text[len-1]=='\n'||box.text[len-1]=='\r'))
+					box.text[--len] = '\0';
+				if (!len) continue;
+				box.x = atoi(cols[6]) / 2;  /* halve: image was scaled 2x */
+				box.y = atoi(cols[7]) / 2;
+				box.width = atoi(cols[8]) / 2;
+				box.height = atoi(cols[9]) / 2;
+				box.confidence = conf;
+				if (screen_ocr.count >= screen_ocr.capacity) {
+					int nc = screen_ocr.capacity ? screen_ocr.capacity * 2 : 64;
+					OcrBox *tmp = realloc(screen_ocr.boxes, nc * sizeof(OcrBox));
+					if (!tmp) break;
+					screen_ocr.boxes = tmp;
+					screen_ocr.capacity = nc;
+				}
+				screen_ocr.boxes[screen_ocr.count++] = box;
+			}
+			fclose(ft);
+		}
+		unlink(tsv1f);
+		unlink(tsv2f);
+
+		/* Dedup */
+		for (int i = 0; i < screen_ocr.count; i++) {
+			for (int j = i + 1; j < screen_ocr.count; j++) {
+				OcrBox *a = &screen_ocr.boxes[i];
+				OcrBox *b = &screen_ocr.boxes[j];
+				if (strcasecmp(a->text, b->text) == 0 &&
+				    abs(a->x - b->x) < 20 && abs(a->y - b->y) < 20) {
+					if (b->confidence > a->confidence) *a = *b;
+					memmove(b, b + 1, (screen_ocr.count - j - 1) * sizeof(OcrBox));
+					screen_ocr.count--;
+					j--;
+				}
+			}
+		}
+		/* Sort by position */
+		for (int i = 0; i < screen_ocr.count - 1; i++) {
+			for (int j = i + 1; j < screen_ocr.count; j++) {
+				OcrBox *a = &screen_ocr.boxes[i];
+				OcrBox *b = &screen_ocr.boxes[j];
+				int ay = a->y + a->height / 2, by = b->y + b->height / 2;
+				int swap = 0;
+				if (abs(ay - by) <= 15) { if (b->x < a->x) swap = 1; }
+				else if (by < ay) swap = 1;
+				if (swap) { OcrBox tmp = *a; *a = *b; *b = tmp; }
+			}
+		}
+	}
+
+	match_count = 0;
+	matches = NULL;
+	if (screen_ocr.count > 0) {
+		matches = ocr_find_text(&screen_ocr, text, &match_count);
+	}
+
+	if (match_count > 0) {
+		int idx = occurrence - 1;
+		if (idx < 0) idx = 0;
+		if (idx >= match_count) idx = match_count - 1;
+		OcrMatch match = matches[idx];
+		free(matches);
+
+		/* Cropped coords → absolute screen coords */
+		int abs_x = crop_x + match.x + match.width / 2 + off_x;
+		int abs_y = crop_y + match.y + match.height / 2 + off_y;
+
+		x11_mouse_move(abs_x, abs_y);
+		usleep_ms(10);
+		x11_click(button, 1);
+
+		char buf[256];
+		snprintf(buf, sizeof(buf),
+			"Clicked \"%s\" (occurrence %d/%d) at screen (%d, %d) [popup/menu]\n"
+			"Text bbox: %d,%d %dx%d",
+			text, idx + 1, match_count, abs_x, abs_y,
+			match.x, match.y, match.width, match.height);
+		ocr_result_free(&screen_ocr);
+		return mcp_text_result(buf);
+	}
+
+	/* Not found anywhere */
+	char visible[2048];
+	int vpos = 0;
+	vpos += snprintf(visible + vpos, sizeof(visible) - vpos,
+		"Text \"%s\" not found on screen.\n\nVisible text: ", text);
+	for (int i = 0; i < screen_ocr.count && vpos < (int)sizeof(visible) - 64; i++) {
+		if (i > 0) vpos += snprintf(visible + vpos, sizeof(visible) - vpos, ", ");
+		vpos += snprintf(visible + vpos, sizeof(visible) - vpos,
+			"%s", screen_ocr.boxes[i].text);
+	}
+	ocr_result_free(&screen_ocr);
+	return mcp_text_result(visible);
 }
-
-/* ── read_screen_text ────────────────────────────────────────────────────── */
-
 cJSON *tool_read_screen_text(const cJSON *params)
 {
 	if (!ocr_available()) {
@@ -841,7 +1091,7 @@ cJSON *tool_drag(const cJSON *params)
 	int from_y = json_int(params, "fromY", 0);
 	int to_x = json_int(params, "toX", 0);
 	int to_y = json_int(params, "toY", 0);
-	int button = json_int(params, "button", 1);
+	int button = json_button(params, "button", 1);
 	int steps = json_int(params, "steps", 10);
 
 	unsigned long wid = resolve_window(params);
@@ -875,7 +1125,7 @@ cJSON *tool_drag(const cJSON *params)
 
 cJSON *tool_mouse_down(const cJSON *params)
 {
-	int button = json_int(params, "button", 1);
+	int button = json_button(params, "button", 1);
 	int x = json_int(params, "x", -1);
 	int y = json_int(params, "y", -1);
 
@@ -900,7 +1150,7 @@ cJSON *tool_mouse_down(const cJSON *params)
 
 cJSON *tool_mouse_up(const cJSON *params)
 {
-	int button = json_int(params, "button", 1);
+	int button = json_button(params, "button", 1);
 	x11_mouse_up(button);
 
 	char buf[64];
