@@ -98,7 +98,7 @@ int x11_list_windows(WindowInfo *out, int max_count, const char *name_filter)
 	xdo_search_t search;
 	memset(&search, 0, sizeof(search));
 	search.require = SEARCH_ANY;
-	search.searchmask = SEARCH_ONLYVISIBLE | SEARCH_NAME;
+	search.searchmask = SEARCH_NAME;
 	if (name_filter && name_filter[0]) {
 		search.winname = name_filter;
 	} else {
@@ -134,7 +134,7 @@ unsigned long x11_find_window(const char *name)
 	xdo_search_t search;
 	memset(&search, 0, sizeof(search));
 	search.require = SEARCH_ANY;
-	search.searchmask = SEARCH_NAME | SEARCH_ONLYVISIBLE;
+	search.searchmask = SEARCH_NAME;
 	search.winname = name;
 	search.max_depth = -1;
 
@@ -146,26 +146,46 @@ unsigned long x11_find_window(const char *name)
 		return 0;
 	}
 
-	/* Find best match: prefer exact title, then largest window */
+	/* Find best match. Scoring:
+	 * - Exact title match with largest area wins immediately
+	 * - Otherwise prefer shorter titles (more specific partial match)
+	 * - Break title-length ties by largest area */
 	unsigned long best = 0;
+	int best_title_len = 999999;
 	int best_area = 0;
+	int best_exact = 0;  /* exact title match flag */
 
 	for (unsigned int i = 0; i < nresults; i++) {
 		WindowInfo info;
 		fill_window_info(results[i], &info);
 
 		if (info.width < 10 || info.height < 10) continue;
+		if (info.title[0] == '\0') continue;
 
-		/* Exact title match wins immediately */
-		if (strcmp(info.title, name) == 0) {
-			best = results[i];
-			break;
+		int is_exact = (strcmp(info.title, name) == 0);
+		int title_len = (int)strlen(info.title);
+		int area = info.width * info.height;
+
+		/* Prefer: exact > partial, then largest area for exact,
+		 * shortest title for partial, then largest area */
+		int dominated = 0;
+		if (best) {
+			if (is_exact && !best_exact)
+				dominated = 0;  /* exact beats partial */
+			else if (!is_exact && best_exact)
+				dominated = 1;  /* partial loses to exact */
+			else if (is_exact && best_exact)
+				dominated = (area <= best_area);  /* both exact: prefer larger */
+			else
+				dominated = (title_len > best_title_len ||
+				             (title_len == best_title_len && area <= best_area));
 		}
 
-		int area = info.width * info.height;
-		if (area > best_area) {
-			best_area = area;
+		if (!dominated) {
 			best = results[i];
+			best_title_len = title_len;
+			best_area = area;
+			best_exact = is_exact;
 		}
 	}
 

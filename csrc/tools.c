@@ -98,6 +98,28 @@ cJSON *tool_screenshot(const cJSON *params)
 	size_t png_len = 0;
 	uint8_t *png = screenshot_capture_png(target, &png_len);
 
+	if (!png && target != 0) {
+		/* XCB GetImage fails for some windows (e.g. transient dialogs on
+		 * Xwayland) — fall back to ImageMagick import */
+		char tmp[64];
+		snprintf(tmp, sizeof(tmp), "/tmp/deskpal_ss_%d.png", getpid());
+		char cmd[256];
+		snprintf(cmd, sizeof(cmd),
+			"import -window 0x%lx png:\"%s\" 2>/dev/null",
+			target, tmp);
+		system(cmd);
+		FILE *f = fopen(tmp, "rb");
+		if (f) {
+			fseek(f, 0, SEEK_END);
+			png_len = ftell(f);
+			fseek(f, 0, SEEK_SET);
+			png = malloc(png_len);
+			if (png) fread(png, 1, png_len, f);
+			fclose(f);
+			unlink(tmp);
+		}
+	}
+
 	if (!png && full_screen) {
 		/* XCB root capture fails on Xwayland — use gnome-screenshot/grim */
 		char tmp[64];
@@ -173,7 +195,8 @@ cJSON *tool_list_windows(const cJSON *params)
 
 cJSON *tool_find_window(const cJSON *params)
 {
-	const char *name = json_str(params, "name", "");
+	const char *name = json_str(params, "name", NULL);
+	if (!name) name = json_str(params, "windowName", "");
 	unsigned long wid = x11_find_window(name);
 	if (!wid) {
 		char msg[256];
