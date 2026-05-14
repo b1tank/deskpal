@@ -33,4 +33,15 @@ cJSON *tool_drag(const cJSON *params);
 cJSON *tool_mouse_down(const cJSON *params);
 cJSON *tool_mouse_up(const cJSON *params);
 
+/* Tools surfaced by OTelux self-verify skill — see docs/proposed-tools.md */
+cJSON *tool_get_clipboard(const cJSON *params);
+cJSON *tool_set_clipboard(const cJSON *params);
+cJSON *tool_hover_text(const cJSON *params);
+cJSON *tool_read_file(const cJSON *params);
+cJSON *tool_exec(const cJSON *params);
+
+/* Security gates set by CLI flags in main.c. Default 0 (off). */
+extern int deskpal_allow_fs;
+extern int deskpal_allow_exec;
+
 #endif /* DESKPAL_TOOLS_H */

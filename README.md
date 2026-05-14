@@ -27,6 +27,10 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 | `resize_window` | Resize a window to specified dimensions |
 | `wait_for_window` | Wait for a window with a given title to appear |
 | `launch_app` | Launch a desktop app, kill existing instances, wait for window |
+| `get_clipboard` / `set_clipboard` | Read or write the OS clipboard (auto-detects `wl-clipboard` / `xclip` / `xsel`) |
+| `hover_text` | Move the mouse over OCR-located text and return just the tooltip text that became visible |
+| `read_file` | Read a file from disk. Requires `--allow-fs` |
+| `exec` | Run a short shell command and capture stdout+stderr with timeout. Requires `--allow-exec` |
 
 ### How it works
 
@@ -85,6 +89,21 @@ Or test directly via stdin:
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' | ./build/deskpal
 ```
+
+### Security flags
+
+Two tools are gated behind off-by-default CLI flags because they
+expand deskpal's blast radius beyond "drive the desktop":
+
+| Flag | Tool | What it does |
+|------|------|--------------|
+| `--allow-fs` | `read_file` | Read arbitrary files from disk |
+| `--allow-exec` | `exec` | Run short shell commands with a timeout |
+
+Without the flags the tools are still listed in `tools/list` but
+return a "disabled. Start deskpal with `--allow-…`" message. Even
+with `--allow-fs`, paths under `/etc/shadow`, `/etc/sudoers`,
+`/root/`, and `/proc/self/maps` are refused.
 
 ## Testing
 

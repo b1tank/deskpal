@@ -10,7 +10,12 @@ If you're an agent and you hit a gap not listed here while running the
 
 ---
 
-## 1. `get_clipboard` / `set_clipboard`
+## 1. `get_clipboard` / `set_clipboard` ✅ shipped
+
+**Status**: shipped in [commit](../csrc/tools.c) — see `tool_get_clipboard` /
+`tool_set_clipboard`. Shells out to `wl-paste`/`wl-copy` (Wayland) →
+`xclip` → `xsel` in priority order; returns an "install one of…" error
+if none are on PATH. No CLI flag required.
 
 **Use case**: Verify that a "click to copy" UI actually wrote to the OS
 clipboard. Today the agent has to drop out of deskpal entirely and
@@ -127,7 +132,13 @@ coordinates from `get_window_geometry` + `read_screen_text` arithmetic.
 
 ---
 
-## 3. `read_file` (and maybe `write_file`)
+## 3. `read_file` (and maybe `write_file`) ✅ shipped (read-only)
+
+**Status**: `read_file` shipped — see `tool_read_file`. Gated behind
+`deskpal --allow-fs`; off by default. Hard-coded deny list for
+`/etc/shadow`, `/etc/sudoers`, `/root/`, `/proc/self/maps` even with
+`--allow-fs`. `maxBytes` capped at 16 MiB and reports `TRUNCATED` in
+the header when output is clipped. `write_file` not implemented.
 
 **Use case**: Verify the contents of a config file the app just wrote
 (e.g. `~/.config/otelux/settings.json`). Today the agent has to shell
@@ -164,7 +175,15 @@ security boundary above.
 
 ---
 
-## 4. `exec` (run a short shell command)
+## 4. `exec` (run a short shell command) ✅ shipped
+
+**Status**: shipped — see `tool_exec`. Gated behind
+`deskpal --allow-exec`; off by default. Runs via `fork`/`execl
+"/bin/sh", "-c", …` so it's not affected by popen-shell escaping
+quirks. Deadline enforced with `setitimer(SIGALRM)` + `SIGTERM`;
+`timeoutMs` is capped at 60 000. Output (stdout + stderr merged) is
+capped at 64 KiB; the header reports byte count, exit code, and
+whether the command timed out.
 
 **Use case**: Run `ss -ltnp`, `curl`, `pkill`, etc. from inside deskpal
 so the whole run is a single MCP session. Today the agent splits between
@@ -201,7 +220,15 @@ deskpal is the user-facing automation surface.
 
 ---
 
-## 5. `hover_text` (and a tooltip-aware variant)
+## 5. `hover_text` (and a tooltip-aware variant) ✅ shipped
+
+**Status**: shipped — see `tool_hover_text`. Locates the target word
+with OCR inside the named window, snapshots OCR before/after the hover,
+and returns only the words that became newly visible (matched by text
++ ±20 px centre drift to absorb OCR jitter). The after-snapshot OCRs
+the full screen because tooltips render as separate override-redirect
+windows that fall outside the host window's bounds. Default
+`settleMs=800`.
 
 **Use case**: Move the cursor over an OCR-found element and wait long
 enough for a tooltip to render, then return what's newly visible. Today
@@ -276,16 +303,11 @@ accent border that OCR can't resolve.
 
 ---
 
-## 7. `tail_log` *(nice-to-have)*
+## 7. `tail_log` *(nice-to-have)* — subsumed by `exec`
 
-**Use case**: Read the last N lines of an app's stdout/stderr log
-without leaving deskpal. Useful when verifying that the receiver
-printed "listening on …" or that a warning was raised.
-
-**Surfaced by**: OTelux self-verify §5 (env validation).
-
-This is fully subsumed by `exec` (`tail -n 20 /tmp/log`), so it only
-matters if `exec` doesn't ship.
+`exec` is shipped, so `tail_log` is fully covered by
+`exec({command: "tail -n 20 /tmp/foo.log"})`. Closing without
+implementing a dedicated tool.
 
 ---
 

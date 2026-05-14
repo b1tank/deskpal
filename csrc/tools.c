@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/time.h>     /* setitimer for tool_exec deadline */
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -1181,6 +1182,443 @@ cJSON *tool_mouse_up(const cJSON *params)
 	return mcp_text_result(buf);
 }
 
+/* ── Clipboard ────────────────────────────────────────────────────────────
+ * Surfaced by OTelux self-verify §2.2 (verify "click to copy" wrote to
+ * the OS clipboard).  Implementation shells out to whatever clipboard
+ * helper is on PATH — wl-paste (Wayland), xclip (X11), xsel (X11
+ * fallback). Returns empty string + ok=true if no clipboard owner is
+ * set, never blocks.
+ *
+ * Note: native XCB selection requests would be more elegant but require
+ * an event loop and ~200 LOC. The shell-out path is portable across
+ * X11/Wayland sessions and matches the style of screenshot fallbacks
+ * elsewhere in this file. */
+
+/* Detect best clipboard helper. cmd_buf must be PATH_LEN long.
+ * mode is 'r' for read, 'w' for write. Returns 0 on success, -1 if no
+ * helper is available. */
+static int build_clipboard_cmd(char *cmd_buf, size_t cmd_len, char mode,
+                                const char *selection)
+{
+	int is_primary = selection && strcmp(selection, "primary") == 0;
+
+	/* Probe helpers in order: wl-clipboard (Wayland), xclip (X11), xsel. */
+	if (access("/usr/bin/wl-paste", X_OK) == 0 && getenv("WAYLAND_DISPLAY")) {
+		if (mode == 'r') {
+			snprintf(cmd_buf, cmd_len,
+				"wl-paste --no-newline%s 2>/dev/null",
+				is_primary ? " --primary" : "");
+		} else {
+			snprintf(cmd_buf, cmd_len,
+				"wl-copy%s",
+				is_primary ? " --primary" : "");
+		}
+		return 0;
+	}
+	if (access("/usr/bin/xclip", X_OK) == 0) {
+		const char *sel = is_primary ? "primary" : "clipboard";
+		if (mode == 'r') {
+			snprintf(cmd_buf, cmd_len,
+				"xclip -selection %s -o 2>/dev/null", sel);
+		} else {
+			snprintf(cmd_buf, cmd_len,
+				"xclip -selection %s -i", sel);
+		}
+		return 0;
+	}
+	if (access("/usr/bin/xsel", X_OK) == 0) {
+		const char *flag = is_primary ? "-p" : "-b";
+		if (mode == 'r') {
+			snprintf(cmd_buf, cmd_len, "xsel %s -o 2>/dev/null", flag);
+		} else {
+			snprintf(cmd_buf, cmd_len, "xsel %s -i", flag);
+		}
+		return 0;
+	}
+	return -1;
+}
+
+cJSON *tool_get_clipboard(const cJSON *params)
+{
+	const char *selection = json_str(params, "selection", "clipboard");
+
+	char cmd[256];
+	if (build_clipboard_cmd(cmd, sizeof(cmd), 'r', selection) != 0) {
+		return mcp_text_result(
+			"No clipboard helper available. Install one of: "
+			"wl-clipboard (Wayland), xclip, xsel.");
+	}
+
+	FILE *p = popen(cmd, "r");
+	if (!p) return mcp_text_result("Failed to spawn clipboard reader");
+
+	/* Cap at 1 MiB — clipboard contents shouldn't be huge for our
+	 * automation use cases (URLs, JSON, short strings). */
+	const size_t cap = 1024 * 1024;
+	char *buf = malloc(cap + 1);
+	if (!buf) { pclose(p); return mcp_text_result("Out of memory"); }
+	size_t total = 0;
+	size_t n;
+	while ((n = fread(buf + total, 1, cap - total, p)) > 0) {
+		total += n;
+		if (total >= cap) break;
+	}
+	buf[total] = '\0';
+	pclose(p);
+
+	/* Strip a single trailing newline — xclip/xsel append one, wl-paste
+	 * with --no-newline does not. */
+	while (total > 0 && (buf[total - 1] == '\n' || buf[total - 1] == '\r')) {
+		buf[--total] = '\0';
+	}
+
+	cJSON *ret = mcp_text_result(buf[0] ? buf : "(clipboard empty)");
+	free(buf);
+	return ret;
+}
+
+cJSON *tool_set_clipboard(const cJSON *params)
+{
+	const char *text = json_str(params, "text", "");
+	const char *selection = json_str(params, "selection", "clipboard");
+
+	char cmd[256];
+	if (build_clipboard_cmd(cmd, sizeof(cmd), 'w', selection) != 0) {
+		return mcp_text_result(
+			"No clipboard helper available. Install one of: "
+			"wl-clipboard (Wayland), xclip, xsel.");
+	}
+
+	FILE *p = popen(cmd, "w");
+	if (!p) return mcp_text_result("Failed to spawn clipboard writer");
+	size_t tlen = strlen(text);
+	if (tlen > 0) fwrite(text, 1, tlen, p);
+	int rc = pclose(p);
+
+	char buf[128];
+	snprintf(buf, sizeof(buf),
+		"Wrote %zu bytes to %s selection%s",
+		tlen, selection,
+		rc == 0 ? "" : " (helper exited non-zero)");
+	return mcp_text_result(buf);
+}
+
+/* ── hover_text ─────────────────────────────────────────────────────────────
+ * Surfaced by OTelux self-verify §2.1 (status-dot tooltip). Hovers over
+ * an OCR-located word, waits for the tooltip to render, OCRs again, and
+ * returns the text that became visible. Returning the diff (vs. dumping
+ * the whole screen) tells the caller exactly what the tooltip says. */
+
+/* Return true if box `b` already appears in `before` — same text and
+ * its centre lies within `b`'s footprint of an existing box. The position
+ * tolerance is generous because OCR jitters bbox edges by a few pixels
+ * between consecutive captures even with no visual change. */
+static int box_was_present_before(const OcrBox *b, const OcrResult *before)
+{
+	int cx = b->x + b->width / 2;
+	int cy = b->y + b->height / 2;
+	for (int i = 0; i < before->count; i++) {
+		const OcrBox *o = &before->boxes[i];
+		if (strcmp(o->text, b->text) != 0) continue;
+		int ocx = o->x + o->width / 2;
+		int ocy = o->y + o->height / 2;
+		/* Allow ±20 px drift in either axis. */
+		if (abs(ocx - cx) <= 20 && abs(ocy - cy) <= 20) return 1;
+	}
+	return 0;
+}
+
+cJSON *tool_hover_text(const cJSON *params)
+{
+	if (!ocr_available()) {
+		return mcp_text_result(
+			"OCR not available. Install: sudo apt install tesseract-ocr");
+	}
+
+	const char *text = json_str(params, "text", "");
+	int settle_ms = json_int(params, "settleMs", 800);
+	if (!text[0]) return mcp_text_result("Missing 'text' parameter");
+
+	unsigned long wid = resolve_window(params);
+	unsigned long target = wid ? wid : x11_get_active_window();
+
+	WindowInfo info;
+	if (x11_get_window_info(target, &info) != 0) {
+		return mcp_text_result("Could not get window info");
+	}
+
+	/* Locate the target text in the window. */
+	OcrResult before = { 0 };
+	ocr_screenshot(target, &before);
+	if (before.count == 0) {
+		ocr_result_free(&before);
+		return mcp_text_result("OCR returned no words for the target window");
+	}
+
+	int n_matches = 0;
+	OcrMatch *matches = ocr_find_text(&before, text, &n_matches);
+	if (n_matches == 0) {
+		free(matches);
+		ocr_result_free(&before);
+		char buf[160];
+		snprintf(buf, sizeof(buf), "Text \"%s\" not found on screen", text);
+		return mcp_text_result(buf);
+	}
+	OcrMatch hit = matches[0];
+	free(matches);
+
+	int hover_x = info.x + hit.x + hit.width / 2;
+	int hover_y = info.y + hit.y + hit.height / 2;
+	x11_mouse_move(hover_x, hover_y);
+	usleep_ms(settle_ms);
+
+	/* After-snapshot: tooltip may render outside the target window (it
+	 * is its own override-redirect window). Capture the full screen. */
+	OcrResult after = { 0 };
+	ocr_screenshot(0, &after);
+
+	/* Build a textual diff. */
+	char body[4096];
+	int bpos = 0;
+	int new_words = 0;
+	for (int i = 0; i < after.count && bpos < (int)sizeof(body) - 64; i++) {
+		const OcrBox *b = &after.boxes[i];
+		if (box_was_present_before(b, &before)) continue;
+		if (b->confidence < 40) continue;
+		bpos += snprintf(body + bpos, sizeof(body) - bpos,
+			"  %s (x=%d y=%d)\n", b->text, b->x, b->y);
+		new_words++;
+	}
+
+	ocr_result_free(&before);
+	ocr_result_free(&after);
+
+	char header[256];
+	if (new_words == 0) {
+		snprintf(header, sizeof(header),
+			"Hovered \"%s\" at (%d,%d); no tooltip detected after %d ms.",
+			text, hover_x, hover_y, settle_ms);
+		return mcp_text_result(header);
+	}
+	snprintf(header, sizeof(header),
+		"Hovered \"%s\" at (%d,%d); %d new word(s) became visible after %d ms:\n",
+		text, hover_x, hover_y, new_words, settle_ms);
+
+	char *result = malloc(strlen(header) + strlen(body) + 1);
+	if (!result) return mcp_text_result("Out of memory");
+	strcpy(result, header);
+	strcat(result, body);
+	cJSON *ret = mcp_text_result(result);
+	free(result);
+	return ret;
+}
+
+/* ── read_file ─────────────────────────────────────────────────────────────
+ * Surfaced by OTelux self-verify §5 (settings persistence). Lets agents
+ * verify on-disk state without dropping out of deskpal. Gated behind
+ * --allow-fs because reading arbitrary files materially expands the
+ * blast radius of this MCP server. */
+
+cJSON *tool_read_file(const cJSON *params)
+{
+	if (!deskpal_allow_fs) {
+		return mcp_text_result(
+			"read_file is disabled. Start deskpal with --allow-fs to enable it.");
+	}
+
+	const char *path = json_str(params, "path", "");
+	const char *encoding = json_str(params, "encoding", "utf8");
+	int max_bytes = json_int(params, "maxBytes", 1024 * 1024);
+	if (max_bytes <= 0 || max_bytes > 16 * 1024 * 1024) {
+		max_bytes = 1024 * 1024;
+	}
+	if (!path[0]) return mcp_text_result("Missing 'path' parameter");
+
+	/* Reject obviously sensitive paths even with --allow-fs. The operator
+	 * opted into the tool, not into surfacing their SSH keys. */
+	static const char *deny_prefixes[] = {
+		"/etc/shadow", "/etc/sudoers",
+		"/root/", "/proc/self/maps", NULL
+	};
+	for (int i = 0; deny_prefixes[i]; i++) {
+		if (strncmp(path, deny_prefixes[i], strlen(deny_prefixes[i])) == 0) {
+			char buf[256];
+			snprintf(buf, sizeof(buf),
+				"read_file: refusing to read sensitive path %s", path);
+			return mcp_text_result(buf);
+		}
+	}
+
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		char buf[512];
+		snprintf(buf, sizeof(buf), "read_file: cannot open %s", path);
+		return mcp_text_result(buf);
+	}
+
+	char *buf = malloc((size_t)max_bytes + 1);
+	if (!buf) { fclose(f); return mcp_text_result("Out of memory"); }
+	size_t n = fread(buf, 1, (size_t)max_bytes, f);
+	int truncated = 0;
+	/* Probe one more byte to detect truncation. */
+	if (n == (size_t)max_bytes) {
+		char probe;
+		if (fread(&probe, 1, 1, f) == 1) truncated = 1;
+	}
+	fclose(f);
+	buf[n] = '\0';
+
+	if (strcmp(encoding, "base64") == 0) {
+		/* Tools don't need base64 today; the requesting agent should
+		 * pass utf8. Surface a clear error rather than half-implement. */
+		free(buf);
+		return mcp_text_result(
+			"read_file: encoding=\"base64\" is not implemented yet; "
+			"use \"utf8\" for text files.");
+	}
+
+	char header[256];
+	snprintf(header, sizeof(header),
+		"%s (%zu bytes%s):\n",
+		path, n, truncated ? ", TRUNCATED" : "");
+	char *result = malloc(strlen(header) + n + 1);
+	if (!result) { free(buf); return mcp_text_result("Out of memory"); }
+	strcpy(result, header);
+	memcpy(result + strlen(header), buf, n + 1);
+	free(buf);
+	cJSON *ret = mcp_text_result(result);
+	free(result);
+	return ret;
+}
+
+/* ── exec ──────────────────────────────────────────────────────────────────
+ * Surfaced by OTelux self-verify §1.1 (port check), §6/§10 (curl),
+ * §11/§12 (`ss`). Lets agents run short shell commands inside the
+ * deskpal session instead of splitting between two tool surfaces.
+ *
+ * Gated behind --allow-exec. Implemented via popen + a SIGALRM-based
+ * deadline so a hung child doesn't wedge the MCP server. We only
+ * capture stdout — stderr is merged in via the shell `2>&1` rather
+ * than via pipe(2)+select(2) to keep the implementation small. */
+
+static volatile pid_t g_exec_child_pid = 0;
+static volatile int   g_exec_timed_out = 0;
+
+static void exec_alarm_handler(int sig)
+{
+	(void)sig;
+	if (g_exec_child_pid > 0) {
+		g_exec_timed_out = 1;
+		/* Killing the shell kills its descendants in most cases; for
+		 * stubborn children the agent will hit it again on the next
+		 * call. */
+		kill(g_exec_child_pid, SIGTERM);
+	}
+}
+
+cJSON *tool_exec(const cJSON *params)
+{
+	if (!deskpal_allow_exec) {
+		return mcp_text_result(
+			"exec is disabled. Start deskpal with --allow-exec to enable it.");
+	}
+
+	const char *command = json_str(params, "command", "");
+	int timeout_ms = json_int(params, "timeoutMs", 5000);
+	if (timeout_ms <= 0) timeout_ms = 5000;
+	if (timeout_ms > 60000) timeout_ms = 60000;
+	if (!command[0]) return mcp_text_result("Missing 'command' parameter");
+
+	/* Build "command 2>&1" so we capture both streams in one pipe. */
+	char *full = malloc(strlen(command) + 8);
+	if (!full) return mcp_text_result("Out of memory");
+	sprintf(full, "%s 2>&1", command);
+
+	/* popen() forks a shell — that's the child PID we want to alarm. We
+	 * can't get popen's PID directly, so use posix_spawn-style fork/exec
+	 * manually with /bin/sh. */
+	int pipefd[2];
+	if (pipe(pipefd) != 0) { free(full); return mcp_text_result("pipe() failed"); }
+	pid_t pid = fork();
+	if (pid < 0) {
+		free(full);
+		close(pipefd[0]); close(pipefd[1]);
+		return mcp_text_result("fork() failed");
+	}
+	if (pid == 0) {
+		/* Child */
+		close(pipefd[0]);
+		dup2(pipefd[1], STDOUT_FILENO);
+		dup2(pipefd[1], STDERR_FILENO);
+		close(pipefd[1]);
+		execl("/bin/sh", "sh", "-c", full, (char *)NULL);
+		_exit(127);
+	}
+	close(pipefd[1]);
+	free(full);
+
+	g_exec_child_pid = pid;
+	g_exec_timed_out = 0;
+	struct sigaction sa = { 0 }, old_sa;
+	sa.sa_handler = exec_alarm_handler;
+	sigaction(SIGALRM, &sa, &old_sa);
+	/* setitimer for millisecond resolution. */
+	struct itimerval itv = { 0 };
+	itv.it_value.tv_sec  = timeout_ms / 1000;
+	itv.it_value.tv_usec = (timeout_ms % 1000) * 1000;
+	setitimer(ITIMER_REAL, &itv, NULL);
+
+	/* Read output. */
+	const size_t cap = 64 * 1024;
+	char *out = malloc(cap + 1);
+	if (!out) {
+		close(pipefd[0]);
+		waitpid(pid, NULL, 0);
+		setitimer(ITIMER_REAL, &(struct itimerval){{0,0},{0,0}}, NULL);
+		sigaction(SIGALRM, &old_sa, NULL);
+		g_exec_child_pid = 0;
+		return mcp_text_result("Out of memory");
+	}
+	size_t total = 0;
+	ssize_t rn;
+	while (total < cap &&
+	       (rn = read(pipefd[0], out + total, cap - total)) > 0) {
+		total += (size_t)rn;
+	}
+	out[total] = '\0';
+	close(pipefd[0]);
+
+	int status = 0;
+	waitpid(pid, &status, 0);
+
+	/* Clear the timer + restore handler. */
+	setitimer(ITIMER_REAL, &(struct itimerval){{0,0},{0,0}}, NULL);
+	sigaction(SIGALRM, &old_sa, NULL);
+	int timed_out = g_exec_timed_out;
+	g_exec_child_pid = 0;
+
+	int exit_code = -1;
+	if (WIFEXITED(status))        exit_code = WEXITSTATUS(status);
+	else if (WIFSIGNALED(status)) exit_code = 128 + WTERMSIG(status);
+
+	char header[256];
+	snprintf(header, sizeof(header),
+		"$ %s\nexit=%d%s%s\n--- output (%zu bytes) ---\n",
+		command, exit_code,
+		timed_out ? " (timed out)" : "",
+		total >= cap ? " (output truncated)" : "",
+		total);
+
+	char *result = malloc(strlen(header) + total + 1);
+	if (!result) { free(out); return mcp_text_result("Out of memory"); }
+	strcpy(result, header);
+	memcpy(result + strlen(header), out, total + 1);
+	free(out);
+	cJSON *ret = mcp_text_result(result);
+	free(result);
+	return ret;
+}
+
 /* ── Tool registration ────────────────────────────────────────────────────── */
 
 /* Declaration of the register function from mcp.c */
@@ -1433,4 +1871,72 @@ void tools_register_all(void)
 		"  }"
 		"}",
 		tool_mouse_up);
+
+	/* ── Tools surfaced by OTelux self-verify — docs/proposed-tools.md ── */
+
+	mcp_register_tool("get_clipboard",
+		"Read the current OS clipboard text. Uses wl-paste / xclip / xsel "
+		"depending on what's installed. Returns empty string if no owner.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"selection\": {\"type\": \"string\", \"enum\": [\"clipboard\", \"primary\"], \"default\": \"clipboard\"}"
+		"  }"
+		"}",
+		tool_get_clipboard);
+
+	mcp_register_tool("set_clipboard",
+		"Write text to the OS clipboard. Uses wl-copy / xclip / xsel.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"text\": {\"type\": \"string\"},"
+		"    \"selection\": {\"type\": \"string\", \"enum\": [\"clipboard\", \"primary\"], \"default\": \"clipboard\"}"
+		"  },"
+		"  \"required\": [\"text\"]"
+		"}",
+		tool_set_clipboard);
+
+	mcp_register_tool("hover_text",
+		"Move the mouse over an OCR-located word, wait for a tooltip to "
+		"render, and return only the text that became newly visible.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"text\": {\"type\": \"string\", \"description\": \"Visible text to hover over\"},"
+		"    \"windowId\": {\"type\": \"string\"},"
+		"    \"windowName\": {\"type\": \"string\"},"
+		"    \"settleMs\": {\"type\": \"number\", \"default\": 800, \"description\": \"How long to wait for tooltip to appear\"}"
+		"  },"
+		"  \"required\": [\"text\"]"
+		"}",
+		tool_hover_text);
+
+	mcp_register_tool("read_file",
+		"Read a file from disk and return its contents. Requires "
+		"deskpal to be started with --allow-fs.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"path\": {\"type\": \"string\"},"
+		"    \"encoding\": {\"type\": \"string\", \"enum\": [\"utf8\"], \"default\": \"utf8\"},"
+		"    \"maxBytes\": {\"type\": \"number\", \"default\": 1048576}"
+		"  },"
+		"  \"required\": [\"path\"]"
+		"}",
+		tool_read_file);
+
+	mcp_register_tool("exec",
+		"Run a short shell command and return stdout+stderr. Requires "
+		"deskpal to be started with --allow-exec. Capped at 60s timeout "
+		"and 64KiB output.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"command\": {\"type\": \"string\"},"
+		"    \"timeoutMs\": {\"type\": \"number\", \"default\": 5000, \"description\": \"Max 60000\"}"
+		"  },"
+		"  \"required\": [\"command\"]"
+		"}",
+		tool_exec);
 }
