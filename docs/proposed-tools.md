@@ -311,56 +311,63 @@ implementing a dedicated tool.
 
 ---
 
-## 8. `click_text` / `click` don't reach Chromium DOM under Wayland (BUG)
+## 8. `click_text` / `click` don't reach Chromium DOM under Wayland ✅ fixed
 
-**Status**: open bug. Surfaced by OTelux self-verify §2.2 (URL pill copy).
+**Status**: fixed in commit `741ad96` (verified end-to-end against
+OTelux). Notes kept because the underlying input-routing pitfalls are
+worth being aware of for future tools.
 
-**Symptom**: deskpal's `click` and `click_text` move the cursor to the
-target on screen but the Electron/Chromium renderer never receives a
-DOM `mousedown`/`click` event. Confirmed via CDP by installing a
-capture-phase listener (`document.addEventListener("click", …, true)`)
-and observing `[]` after a `click_text` that deskpal reports as
-successful with a correct bbox. Side-by-side, `xdotool mousemove …
-click 1` at the same screen coordinate produces a DOM event with
-`isTrusted: true`, so the renderer is reachable — just not by deskpal.
+**Symptom (pre-fix)**: deskpal's `click` and `click_text` moved the
+cursor to the target on screen but the Electron/Chromium renderer
+never received a DOM `mousedown`/`click` event. Confirmed via CDP by
+installing a capture-phase listener
+(`document.addEventListener("click", …, true)`) and observing `[]`
+after a `click_text` that deskpal reported as successful with the
+correct bbox. Side-by-side, `xdotool mousemove … click 1` at the same
+screen coordinate produced a DOM event with `isTrusted: true`, so the
+renderer was reachable — just not by deskpal.
 
-**Likely cause**: deskpal's click path is `uinput` (kernel input
-device) → `libinput` → mutter → `wl_pointer` → client. Under Wayland
-the click only dispatches if the compositor has already transitioned
-*pointer focus* to the target window; uinput's motion+click sequence
-appears to deliver motion fine (visible cursor) but the immediate
-`BTN_LEFT` press/release does not always race-win the focus
-transition for Xwayland clients. `xdotool` works because it talks
-`XTEST` directly to the X server, which synthesizes events on a
-specific X window without depending on Wayland-side focus state.
+**Two distinct bugs were hiding behind one symptom**:
 
-Native modal dialogs (Electron's "Error" `MessageBox`) **do** receive
-deskpal clicks — those go through GTK/X11 directly, not through
-Chromium's renderer pipeline.
+1. *Delivery.* deskpal's click path was `uinput` (kernel input device)
+   → `libinput` → mutter → `wl_pointer` → client. Under Wayland the
+   click only dispatches if the compositor has already transitioned
+   *pointer focus* to the target window; uinput's motion+click
+   sequence delivered the motion fine (visible cursor) but the
+   immediate `BTN_LEFT` press/release did not always race-win the
+   focus transition for Xwayland clients. `xdotool` works because it
+   talks `XTEST` directly to the X server, which synthesizes events
+   on a specific X window without depending on Wayland-side focus
+   state.
 
-**Use case**: every automated test of an Electron/Chromium UI on a
-Wayland host. Today this is invisible — `click_text` returns success
-but nothing happens, which silently breaks every subsequent step.
+2. *Aim.* `xdo_get_window_location` returns a coordinate that does
+   not match the renderer's content origin for Mutter-managed
+   Electron windows (observed ~90 screen-px offset on HiDPI). Adding
+   `info.x`/`info.y` to OCR-relative coords therefore aimed the
+   uinput cursor at the wrong place — *even when* uinput's click
+   would have been delivered. The OCR screenshot of the window is
+   captured in content-origin coordinates, but xdo_get_window_location
+   returns a different reference frame.
 
-**Proposal**:
+**Side note**: native modal dialogs (Electron's "Error" `MessageBox`)
+**did** receive deskpal clicks pre-fix — those go through GTK/X11
+directly, not through Chromium's renderer pipeline.
 
-- **Short term**: extend the existing `xdotool` fallback in
-  `tool_click` (already used for non-left buttons) to also cover
-  left-clicks. Detect Wayland (`$WAYLAND_DISPLAY` set) and prefer
-  `xdotool` for *all* mouse buttons inside known browser windows.
-  Maintain uinput for non-browser targets and as a fallback when
-  `xdotool` is missing.
-- **Medium term**: investigate `libei` (XDG RemoteDesktop portal),
-  which is the supported Wayland path for synthetic input.
-- **Telemetry**: have `click_text` verify the click by comparing
-  cursor coords against the focused-window's screen rect *after* the
-  press, and warn if the active window changed between motion and
-  press.
+**Fix**: on Wayland (`$WAYLAND_DISPLAY` set), route every click /
+mousemove through `xdotool mousemove --window WID X Y click …`.
+xdotool uses the X server's own coordinate system for the target
+window, which is the same space our screenshots/OCR work in, so both
+problems disappear at once. Pure-X11 sessions keep the existing
+uinput fast path.
 
-**Implementation notes**: the X11 fallback path already exists in
-`csrc/uinput.c` / `csrc/x11.c` for right-click; widening the
-condition is a one-line change. The behavior should be opt-out, not
-opt-in, on Wayland.
+Touched functions: `x11_is_wayland`, `x11_window_click`,
+`x11_window_mouse_move`, `x11_click`, `tool_click`, `tool_click_text`
+(Pass 1), `tool_mouse_move`, `tool_hover_text`.
+
+**Open follow-up**: investigate `libei` (XDG RemoteDesktop portal),
+which is the supported Wayland path for synthetic input, so that we
+can remove the xdotool dependency on pure-Wayland sessions where no X
+server is present.
 
 ---
 
