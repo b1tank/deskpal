@@ -311,6 +311,59 @@ implementing a dedicated tool.
 
 ---
 
+## 8. `click_text` / `click` don't reach Chromium DOM under Wayland (BUG)
+
+**Status**: open bug. Surfaced by OTelux self-verify §2.2 (URL pill copy).
+
+**Symptom**: deskpal's `click` and `click_text` move the cursor to the
+target on screen but the Electron/Chromium renderer never receives a
+DOM `mousedown`/`click` event. Confirmed via CDP by installing a
+capture-phase listener (`document.addEventListener("click", …, true)`)
+and observing `[]` after a `click_text` that deskpal reports as
+successful with a correct bbox. Side-by-side, `xdotool mousemove …
+click 1` at the same screen coordinate produces a DOM event with
+`isTrusted: true`, so the renderer is reachable — just not by deskpal.
+
+**Likely cause**: deskpal's click path is `uinput` (kernel input
+device) → `libinput` → mutter → `wl_pointer` → client. Under Wayland
+the click only dispatches if the compositor has already transitioned
+*pointer focus* to the target window; uinput's motion+click sequence
+appears to deliver motion fine (visible cursor) but the immediate
+`BTN_LEFT` press/release does not always race-win the focus
+transition for Xwayland clients. `xdotool` works because it talks
+`XTEST` directly to the X server, which synthesizes events on a
+specific X window without depending on Wayland-side focus state.
+
+Native modal dialogs (Electron's "Error" `MessageBox`) **do** receive
+deskpal clicks — those go through GTK/X11 directly, not through
+Chromium's renderer pipeline.
+
+**Use case**: every automated test of an Electron/Chromium UI on a
+Wayland host. Today this is invisible — `click_text` returns success
+but nothing happens, which silently breaks every subsequent step.
+
+**Proposal**:
+
+- **Short term**: extend the existing `xdotool` fallback in
+  `tool_click` (already used for non-left buttons) to also cover
+  left-clicks. Detect Wayland (`$WAYLAND_DISPLAY` set) and prefer
+  `xdotool` for *all* mouse buttons inside known browser windows.
+  Maintain uinput for non-browser targets and as a fallback when
+  `xdotool` is missing.
+- **Medium term**: investigate `libei` (XDG RemoteDesktop portal),
+  which is the supported Wayland path for synthetic input.
+- **Telemetry**: have `click_text` verify the click by comparing
+  cursor coords against the focused-window's screen rect *after* the
+  press, and warn if the active window changed between motion and
+  press.
+
+**Implementation notes**: the X11 fallback path already exists in
+`csrc/uinput.c` / `csrc/x11.c` for right-click; widening the
+condition is a one-line change. The behavior should be opt-out, not
+opt-in, on Wayland.
+
+---
+
 ## Conventions for new entries
 
 - One section per gap. Same headings: **Use case**, **Surfaced by**,

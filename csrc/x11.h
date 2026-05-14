@@ -54,6 +54,27 @@ int x11_mouse_move(int x, int y);
 /* Click at current position. button: 1=left, 2=middle, 3=right. */
 int x11_click(int button, int repeat);
 
+/* Move-and-click in one shot relative to a specific window.
+ *
+ * On Wayland this is the *only* reliable path: `xdo_get_window_location`
+ * reports a coordinate that doesn't match the renderer's content origin
+ * for Mutter-managed Electron windows (observed ~90 screen-px offset
+ * with HiDPI scaling), and uinput BTN_LEFT races wl_pointer focus
+ * transitions for Xwayland clients. Routing the whole sequence through
+ * `xdotool --window` uses the X server's own coordinate system and
+ * delivers events via XTEST, which both fixes the routing problem and
+ * sidesteps the broken window origin.
+ *
+ * x, y are window-content-relative pixels. */
+int x11_window_click(unsigned long wid, int x, int y, int button, int repeat);
+
+/* Move the cursor to (x, y) in a window's content coordinate space.
+ * Same Wayland rationale as `x11_window_click`. */
+int x11_window_mouse_move(unsigned long wid, int x, int y);
+
+/* True if running under a Wayland compositor (mutter, sway, etc.). */
+int x11_is_wayland(void);
+
 /* Type text string. delay_ms between keystrokes. */
 int x11_type_text(const char *text, int delay_ms);
 

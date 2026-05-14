@@ -248,28 +248,36 @@ cJSON *tool_click(const cJSON *params)
 	int abs_x = info.x + x;
 	int abs_y = info.y + y;
 
-	/* Move cursor to click position — with uinput this also
-	 * gives the window compositor-level focus automatically. */
-	x11_mouse_move(abs_x, abs_y);
-	usleep_ms(10);
-
-	if (button != 1 && uinput_available()) {
-		/* On GNOME Wayland, uinput ABS right-click doesn't trigger
-		 * GTK context menus. Use xdotool for the full move+click
-		 * to keep X11 cursor in sync with the click. */
-		char cmd[128];
-		snprintf(cmd, sizeof(cmd),
-			"xdotool mousemove --window %lu %d %d && xdotool click %d",
-			target, x, y, button);
-		if (dbl) {
-			char cmd2[280];
-			snprintf(cmd2, sizeof(cmd2), "%s && %s", cmd, cmd);
-			system(cmd2);
-		} else {
-			system(cmd);
-		}
+	if (x11_is_wayland()) {
+		/* On Wayland we cannot trust info.x/info.y from
+		 * xdo_get_window_location to match the renderer's content
+		 * origin (observed ~90 screen-px offset on mutter+HiDPI).
+		 * Route the whole motion+press through xdotool --window,
+		 * which uses the X server's coordinate system. */
+		x11_window_click(target, x, y, button, dbl ? 2 : 1);
 	} else {
-		x11_click(button, dbl ? 2 : 1);
+		/* Move cursor to click position — with uinput this also
+		 * gives the window compositor-level focus automatically. */
+		x11_mouse_move(abs_x, abs_y);
+		usleep_ms(10);
+
+		if (button != 1 && uinput_available()) {
+			/* uinput ABS right-click doesn't trigger GTK context
+			 * menus; xdotool does. Keep this path for parity. */
+			char cmd[128];
+			snprintf(cmd, sizeof(cmd),
+				"xdotool mousemove --window %lu %d %d && xdotool click %d",
+				target, x, y, button);
+			if (dbl) {
+				char cmd2[280];
+				snprintf(cmd2, sizeof(cmd2), "%s && %s", cmd, cmd);
+				system(cmd2);
+			} else {
+				system(cmd);
+			}
+		} else {
+			x11_click(button, dbl ? 2 : 1);
+		}
 	}
 
 	char buf[128];
@@ -523,9 +531,13 @@ cJSON *tool_click_text(const cJSON *params)
 		int abs_x = info.x + click_x;
 		int abs_y = info.y + click_y;
 
-		x11_mouse_move(abs_x, abs_y);
-		usleep_ms(10);
-		x11_click(button, 1);
+		if (x11_is_wayland()) {
+			x11_window_click(target, click_x, click_y, button, 1);
+		} else {
+			x11_mouse_move(abs_x, abs_y);
+			usleep_ms(10);
+			x11_click(button, 1);
+		}
 
 		char buf[256];
 		snprintf(buf, sizeof(buf),
@@ -1071,7 +1083,13 @@ cJSON *tool_mouse_move(const cJSON *params)
 		if (x11_get_window_info(wid, &info) == 0) {
 			int abs_x = info.x + x;
 			int abs_y = info.y + y;
-			x11_mouse_move(abs_x, abs_y);
+			if (x11_is_wayland()) {
+				/* info.x/y unreliable on mutter — see
+				 * x11_window_click commentary. */
+				x11_window_mouse_move(wid, x, y);
+			} else {
+				x11_mouse_move(abs_x, abs_y);
+			}
 			char buf[128];
 			snprintf(buf, sizeof(buf),
 				"Mouse moved to (%d, %d) in window [abs: %d, %d]",
@@ -1367,9 +1385,15 @@ cJSON *tool_hover_text(const cJSON *params)
 	OcrMatch hit = matches[0];
 	free(matches);
 
-	int hover_x = info.x + hit.x + hit.width / 2;
-	int hover_y = info.y + hit.y + hit.height / 2;
-	x11_mouse_move(hover_x, hover_y);
+	int rel_x = hit.x + hit.width / 2;
+	int rel_y = hit.y + hit.height / 2;
+	int hover_x = info.x + rel_x;
+	int hover_y = info.y + rel_y;
+	if (x11_is_wayland()) {
+		x11_window_mouse_move(target, rel_x, rel_y);
+	} else {
+		x11_mouse_move(hover_x, hover_y);
+	}
 	usleep_ms(settle_ms);
 
 	/* After-snapshot: tooltip may render outside the target window (it

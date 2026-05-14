@@ -238,11 +238,19 @@ int x11_mouse_move(int x, int y)
 
 int x11_click(int button, int repeat)
 {
-	if (uinput_available() && button == 1)
+	/* Prefer uinput left-click ONLY on pure X11 sessions. On Wayland
+	 * (mutter/Xwayland), uinput BTN_LEFT press/release races the
+	 * wl_pointer focus transition for Chromium-based Xwayland clients:
+	 * the cursor moves but the renderer never receives a DOM click
+	 * event. xdotool click via XTEST is reliably delivered to the
+	 * X window under the cursor. See docs/proposed-tools.md §8. */
+	const char *wayland = getenv("WAYLAND_DISPLAY");
+	if (!wayland && uinput_available() && button == 1)
 		return uinput_click(button, repeat);
-	/* Right/middle click: use xdotool CLI rather than libxdo because
-	 * xdo_click_window(CURRENTWINDOW) via XTest doesn't trigger GTK
-	 * context menus on Xwayland. The CLI xdotool click works. */
+
+	/* All other paths: xdotool CLI. Originally introduced because
+	 * xdo_click_window(CURRENTWINDOW) via libxdo XTest doesn't trigger
+	 * GTK context menus on Xwayland; the CLI tool does. */
 	for (int i = 0; i < repeat; i++) {
 		char cmd[64];
 		snprintf(cmd, sizeof(cmd), "xdotool click %d", button);
@@ -251,6 +259,37 @@ int x11_click(int button, int repeat)
 		if (i < repeat - 1) usleep(50000);
 	}
 	return 0;
+}
+
+int x11_is_wayland(void)
+{
+	const char *wd = getenv("WAYLAND_DISPLAY");
+	return wd && *wd ? 1 : 0;
+}
+
+int x11_window_click(unsigned long wid, int x, int y, int button, int repeat)
+{
+	/* `xdotool mousemove --window WID X Y` translates (X, Y) through the
+	 * X server using the target window's content origin, which is the
+	 * coordinate space our screenshots/OCR also work in. The chained
+	 * `click` runs immediately so we don't race a window move. */
+	char cmd[160];
+	int n = snprintf(cmd, sizeof(cmd),
+		"xdotool mousemove --window %lu %d %d click --repeat %d %d",
+		wid, x, y, repeat, button);
+	if (n < 0 || n >= (int)sizeof(cmd))
+		return -1;
+	return system(cmd) == 0 ? 0 : -1;
+}
+
+int x11_window_mouse_move(unsigned long wid, int x, int y)
+{
+	char cmd[128];
+	int n = snprintf(cmd, sizeof(cmd),
+		"xdotool mousemove --window %lu %d %d", wid, x, y);
+	if (n < 0 || n >= (int)sizeof(cmd))
+		return -1;
+	return system(cmd) == 0 ? 0 : -1;
 }
 
 int x11_type_text(const char *text, int delay_ms)
