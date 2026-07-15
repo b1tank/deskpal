@@ -360,9 +360,10 @@ do_ocr:;
 
 	/* Run tesseract on both original and inverted */
 	char cmd[256];
-	char tsv_base[64], tsv_base2[64];
+	char tsv_base[64], tsv_base2[64], tsv_base3[64];
 	snprintf(tsv_base, sizeof(tsv_base), "/tmp/deskpal_tsv_%d", getpid());
 	snprintf(tsv_base2, sizeof(tsv_base2), "/tmp/deskpal_tsv2_%d", getpid());
+	snprintf(tsv_base3, sizeof(tsv_base3), "/tmp/deskpal_tsv3_%d", getpid());
 
 	snprintf(cmd, sizeof(cmd),
 		"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null", tmp_png, tsv_base);
@@ -371,16 +372,27 @@ do_ocr:;
 	snprintf(cmd, sizeof(cmd),
 		"tesseract \"%s\" \"%s\" -l eng --psm 3 tsv 2>/dev/null", preproc_png, tsv_base2);
 	int rc2 = system(cmd);
+
+	/* Third pass: PSM 11 (sparse text) on the preprocessed image. PSM 3
+	 * assumes a single uniform block of text and often misses small,
+	 * scattered UI labels like dialog/toolbar buttons ("Cancel", "Save");
+	 * PSM 11 finds text anywhere on the image, which is what desktop UIs
+	 * need. Extra boxes are merged by the dedup pass below. */
+	snprintf(cmd, sizeof(cmd),
+		"tesseract \"%s\" \"%s\" -l eng --psm 11 tsv 2>/dev/null", preproc_png, tsv_base3);
+	int rc3 = system(cmd);
+
 	unlink(tmp_png);
 	unlink(preproc_png);
 
-	if (rc != 0 && rc2 != 0) return 0;
+	if (rc != 0 && rc2 != 0 && rc3 != 0) return 0;
 
-	char tsv_file[80], tsv_file2[80];
+	char tsv_file[80], tsv_file2[80], tsv_file3[80];
 	snprintf(tsv_file, sizeof(tsv_file), "%s.tsv", tsv_base);
 	snprintf(tsv_file2, sizeof(tsv_file2), "%s.tsv", tsv_base2);
+	snprintf(tsv_file3, sizeof(tsv_file3), "%s.tsv", tsv_base3);
 
-	const char *tsv_files[] = { tsv_file, tsv_file2, NULL };
+	const char *tsv_files[] = { tsv_file, tsv_file2, tsv_file3, NULL };
 	for (int fi = 0; tsv_files[fi]; fi++) {
 		FILE *ft = fopen(tsv_files[fi], "r");
 		if (!ft) continue;
@@ -439,6 +451,7 @@ do_ocr:;
 	}
 	unlink(tsv_file);
 	unlink(tsv_file2);
+	unlink(tsv_file3);
 
 	/* Deduplicate overlapping boxes from normal + inverted runs */
 	for (int i = 0; i < out->count; i++) {
