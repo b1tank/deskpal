@@ -21,9 +21,9 @@ COMPANION_WINDOW_TITLE = "deskpal-companion-e2e"
 
 
 class DeskpalClient:
-    def __init__(self, env):
+    def __init__(self, env, executable=DESKPAL):
         self.proc = subprocess.Popen(
-            [DESKPAL],
+            [executable],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -519,6 +519,27 @@ def main():
         wait_for_process_group_exit(broken_output_process_group)
         broken_output_client.proc.stdin.close()
         broken_output_client.proc.stderr.close()
+
+        replaced_binary = os.path.join(temp_dir, "deskpal-replaced")
+        shutil.copy2(DESKPAL, replaced_binary)
+        replaced_client = DeskpalClient(env, executable=replaced_binary)
+        os.unlink(replaced_binary)
+        replaced_launch = replaced_client.tool(
+            "launch_isolated_app",
+            {
+                "command": "xmessage",
+                "args": ["-title", "deskpal-replaced-binary-test", "replaced"],
+                "waitForWindow": "deskpal-replaced-binary-test",
+                "timeout": 3,
+            },
+        )
+        replaced_session_id = replaced_launch.get("sessionId")
+        assert replaced_session_id, replaced_launch
+        replaced_closed = replaced_client.tool(
+            "close_isolated_session", {"sessionId": replaced_session_id}
+        )
+        assert "Closed isolated session" in text(replaced_closed), text(replaced_closed)
+        replaced_client.close()
 
     print("PASS: desktop default and session-scoped Xvfb verification stay separate")
     return 0

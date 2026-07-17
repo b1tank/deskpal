@@ -380,15 +380,12 @@ static IsolatedSession *start_session(const char *screen_size,
 		return NULL;
 	}
 
-	char executable[4096];
-	ssize_t executable_len = readlink("/proc/self/exe", executable,
-		                                  sizeof(executable) - 1);
-	if (executable_len < 0) {
-		snprintf(error, error_len, "could not resolve deskpal executable: %s",
-			strerror(errno));
-		return NULL;
-	}
-	executable[executable_len] = '\0';
+	/* Keep the executable reachable even if Ninja atomically replaces the
+	 * on-disk binary while this MCP server is running. The parent remains
+	 * alive for the entire session startup, so its procfs executable link is
+	 * stable across the intermediate xvfb-run exec chain. */
+	char executable[64];
+	snprintf(executable, sizeof(executable), "/proc/%ld/exe", (long)getpid());
 
 	int input_pipe[2] = { -1, -1 };
 	int output_pipe[2] = { -1, -1 };
