@@ -22,7 +22,7 @@ typedef struct {
 
 /* ── Init / cleanup ───────────────────────────────────────────────────────── */
 
-int  x11_init(void);
+int  x11_init(int enable_uinput);
 void x11_cleanup(void);
 
 /* ── Window management ────────────────────────────────────────────────────── */

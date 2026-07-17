@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "mcp.h"
+#include "sessions.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +38,18 @@ void mcp_register_tool(const char *name, const char *description,
 		cJSON_AddStringToObject(schema, "type", "object");
 	}
 	g_schemas[g_tool_count] = schema;
+	if (strcmp(name, "launch_isolated_app") != 0 &&
+	    strcmp(name, "close_isolated_session") != 0) {
+		cJSON *properties = cJSON_GetObjectItem(schema, "properties");
+		if (properties && cJSON_IsObject(properties) &&
+		    !cJSON_GetObjectItem(properties, "sessionId")) {
+			cJSON *session_schema = cJSON_CreateObject();
+			cJSON_AddStringToObject(session_schema, "type", "string");
+			cJSON_AddStringToObject(session_schema, "description",
+				"Isolated session returned by launch_isolated_app. Omit to use the user's desktop.");
+			cJSON_AddItemToObject(properties, "sessionId", session_schema);
+		}
+	}
 	t->input_schema = schema;
 	g_tool_count++;
 }
@@ -78,6 +91,13 @@ cJSON *mcp_text_result(const char *text)
 	return result;
 }
 
+cJSON *mcp_tool_error_result(const char *text)
+{
+	cJSON *result = mcp_text_result(text);
+	cJSON_AddBoolToObject(result, "isError", 1);
+	return result;
+}
+
 cJSON *mcp_image_result(const char *base64_png, const char *mime)
 {
 	cJSON *result = cJSON_CreateObject();
@@ -101,7 +121,7 @@ cJSON *mcp_error(int code, const char *message)
 
 /* ── JSON-RPC transport ───────────────────────────────────────────────────── */
 
-static void send_response(const cJSON *id, cJSON *result, cJSON *error)
+static int send_response(const cJSON *id, cJSON *result, cJSON *error)
 {
 	cJSON *resp = cJSON_CreateObject();
 	cJSON_AddStringToObject(resp, "jsonrpc", "2.0");
@@ -119,29 +139,18 @@ static void send_response(const cJSON *id, cJSON *result, cJSON *error)
 	}
 
 	char *json = cJSON_PrintUnformatted(resp);
+	int failed = 0;
 	if (json) {
-		fprintf(stdout, "%s\n", json);
-		fflush(stdout);
+		if (fprintf(stdout, "%s\n", json) < 0 ||
+		    fflush(stdout) != 0 || ferror(stdout)) {
+			failed = 1;
+		}
 		free(json);
+	} else {
+		failed = 1;
 	}
 	cJSON_Delete(resp);
-}
-
-static void send_notification(const char *method, cJSON *params)
-{
-	cJSON *msg = cJSON_CreateObject();
-	cJSON_AddStringToObject(msg, "jsonrpc", "2.0");
-	cJSON_AddStringToObject(msg, "method", method);
-	if (params) {
-		cJSON_AddItemToObject(msg, "params", params);
-	}
-	char *json = cJSON_PrintUnformatted(msg);
-	if (json) {
-		fprintf(stdout, "%s\n", json);
-		fflush(stdout);
-		free(json);
-	}
-	cJSON_Delete(msg);
+	return failed ? -1 : 0;
 }
 
 /* ── Request handlers ─────────────────────────────────────────────────────── */
@@ -189,6 +198,20 @@ static cJSON *handle_tools_call(const cJSON *params)
 	}
 
 	const cJSON *arguments = cJSON_GetObjectItem(params, "arguments");
+	const cJSON *session_id = arguments
+		? cJSON_GetObjectItem(arguments, "sessionId") : NULL;
+	int session_routable =
+		strcmp(name_item->valuestring, "launch_isolated_app") != 0 &&
+		strcmp(name_item->valuestring, "close_isolated_session") != 0;
+	if (session_id && session_routable &&
+	    (!cJSON_IsString(session_id) || !session_id->valuestring[0])) {
+		return mcp_tool_error_result(
+			"sessionId must be a non-empty string. Omit it only when the tool should target the user's desktop.");
+	}
+	if (session_id && session_routable) {
+		return sessions_forward_tool(session_id->valuestring,
+			name_item->valuestring, arguments);
+	}
 	return tool->handler(arguments ? arguments : cJSON_CreateObject());
 }
 
@@ -199,6 +222,7 @@ int mcp_run(void)
 	char *line = NULL;
 	size_t line_cap = 0;
 	ssize_t line_len;
+	int transport_failed = 0;
 
 	while ((line_len = getline(&line, &line_cap, stdin)) > 0) {
 		/* Strip trailing newline */
@@ -211,7 +235,10 @@ int mcp_run(void)
 		cJSON *req = cJSON_Parse(line);
 		if (!req) {
 			cJSON *err = mcp_error(-32700, "Parse error");
-			send_response(NULL, NULL, err);
+			if (send_response(NULL, NULL, err) != 0) {
+				transport_failed = 1;
+				break;
+			}
 			continue;
 		}
 
@@ -221,28 +248,33 @@ int mcp_run(void)
 
 		if (!method || !cJSON_IsString(method)) {
 			cJSON *err = mcp_error(-32600, "Invalid request: missing method");
-			send_response(id, NULL, err);
+			int send_failed = send_response(id, NULL, err) != 0;
 			cJSON_Delete(req);
+			if (send_failed) {
+				transport_failed = 1;
+				break;
+			}
 			continue;
 		}
 
 		const char *m = method->valuestring;
+		int send_failed = 0;
 
 		if (strcmp(m, "initialize") == 0) {
 			cJSON *result = handle_initialize(params);
-			send_response(id, result, NULL);
+			send_failed = send_response(id, result, NULL) != 0;
 		}
 		else if (strcmp(m, "notifications/initialized") == 0) {
 			/* No response needed for notifications */
 		}
 		else if (strcmp(m, "tools/list") == 0) {
 			cJSON *result = handle_tools_list();
-			send_response(id, result, NULL);
+			send_failed = send_response(id, result, NULL) != 0;
 		}
 		else if (strcmp(m, "tools/call") == 0) {
 			cJSON *result = handle_tools_call(params);
 			if (result) {
-				send_response(id, result, NULL);
+				send_failed = send_response(id, result, NULL) != 0;
 			} else {
 				const cJSON *name_item = params
 					? cJSON_GetObjectItem(params, "name") : NULL;
@@ -251,7 +283,7 @@ int mcp_run(void)
 				         name_item && cJSON_IsString(name_item)
 				         ? name_item->valuestring : "(null)");
 				cJSON *err = mcp_error(-32601, msg);
-				send_response(id, NULL, err);
+				send_failed = send_response(id, NULL, err) != 0;
 			}
 		}
 		else if (strncmp(m, "notifications/", 14) == 0) {
@@ -259,14 +291,18 @@ int mcp_run(void)
 		}
 		else {
 			cJSON *err = mcp_error(-32601, "Method not found");
-			send_response(id, NULL, err);
+			send_failed = send_response(id, NULL, err) != 0;
 		}
 
 		cJSON_Delete(req);
+		if (send_failed) {
+			transport_failed = 1;
+			break;
+		}
 	}
 
 	free(line);
-	return 0;
+	return transport_failed ? -1 : 0;
 }
 
 /* ── Tool registration entry point (called from tools.c) ─────────────────── */

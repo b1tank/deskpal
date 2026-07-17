@@ -78,7 +78,7 @@ static int btn_code(int button)
 /* Helper: open /dev/uinput and return the fd, or -1. */
 static int open_uinput(void)
 {
-	int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+	int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
 	return fd;
 }
 

@@ -12,7 +12,11 @@
 #include "x11.h"
 #include "screenshot.h"
 #include "ocr.h"
+#include "sessions.h"
 #include "uinput.h"
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,6 +88,35 @@ static void usleep_ms(int ms)
 	usleep(ms * 1000);
 }
 
+static int capture_root_to_file(const char *path)
+{
+	size_t png_len = 0;
+	uint8_t *png = screenshot_capture_png(0, &png_len);
+	if (png) {
+		FILE *file = fopen(path, "wb");
+		if (!file) {
+			free(png);
+			return -1;
+		}
+		size_t written = fwrite(png, 1, png_len, file);
+		int close_result = fclose(file);
+		free(png);
+		return written == png_len && close_result == 0 ? 0 : -1;
+	}
+
+	/* GNOME's screenshot service can route through the host session even
+	 * when DISPLAY points at Xvfb. Never use it from an isolated session. */
+	if (getenv("DESKPAL_HEADLESS_ACTIVE")) return -1;
+
+	char cmd[256];
+	snprintf(cmd, sizeof(cmd),
+		"gnome-screenshot -f \"%s\" 2>/dev/null"
+		" || grim \"%s\" 2>/dev/null", path, path);
+	unlink(path);
+	if (system(cmd) != 0) return -1;
+	return access(path, R_OK) == 0 ? 0 : -1;
+}
+
 /* ── screenshot ──────────────────────────────────────────────────────────── */
 
 cJSON *tool_screenshot(const cJSON *params)
@@ -121,7 +154,7 @@ cJSON *tool_screenshot(const cJSON *params)
 		}
 	}
 
-	if (!png && full_screen) {
+	if (!png && full_screen && !getenv("DESKPAL_HEADLESS_ACTIVE")) {
 		/* XCB root capture fails on Xwayland — use gnome-screenshot/grim */
 		char tmp[64];
 		snprintf(tmp, sizeof(tmp), "/tmp/deskpal_ss_%d.png", getpid());
@@ -244,6 +277,8 @@ cJSON *tool_click(const cJSON *params)
 	if (x11_get_window_info(target, &info) != 0) {
 		return mcp_text_result("Could not get window position");
 	}
+	if (getenv("DESKPAL_HEADLESS_ACTIVE"))
+		x11_focus_window(target);
 
 	int abs_x = info.x + x;
 	int abs_y = info.y + y;
@@ -304,16 +339,9 @@ static int ocr_screenshot(unsigned long wid, OcrResult *out)
 	uint8_t *png_data = screenshot_capture_png(wid, &png_len);
 
 	if (!png_data && wid == 0) {
-		/* XCB root capture fails on Xwayland — fall back to external tools */
-		char cmd[256];
-		snprintf(cmd, sizeof(cmd),
-			"gnome-screenshot -f \"%s\" 2>/dev/null"
-			" || grim \"%s\" 2>/dev/null",
-			tmp_png, tmp_png);
-		system(cmd);
-		/* Check if the file was created */
-		FILE *f = fopen(tmp_png, "rb");
-		if (f) { fclose(f); goto do_ocr; }
+		/* XCB root capture can fail on Xwayland. Visible sessions may use
+		 * compositor helpers; headless sessions must remain on their X server. */
+		if (capture_root_to_file(tmp_png) == 0) goto do_ocr;
 		return 0;
 	}
 
@@ -543,6 +571,8 @@ cJSON *tool_click_text(const cJSON *params)
 		int click_y = match.y + match.height / 2 + off_y;
 		int abs_x = info.x + click_x;
 		int abs_y = info.y + click_y;
+		if (getenv("DESKPAL_HEADLESS_ACTIVE"))
+			x11_focus_window(target);
 
 		if (x11_is_wayland()) {
 			x11_window_click(target, click_x, click_y, button, 1);
@@ -572,12 +602,8 @@ cJSON *tool_click_text(const cJSON *params)
 	snprintf(ss_png, sizeof(ss_png), "/tmp/deskpal_ss_%d.png", getpid());
 	snprintf(crop_png, sizeof(crop_png), "/tmp/deskpal_crop_%d.png", getpid());
 
-	{
-		char cmd[256];
-		snprintf(cmd, sizeof(cmd),
-			"gnome-screenshot -f \"%s\" 2>/dev/null"
-			" || grim \"%s\" 2>/dev/null", ss_png, ss_png);
-		system(cmd);
+	if (capture_root_to_file(ss_png) != 0) {
+		return mcp_text_result("Full-screen capture failed");
 	}
 
 	/* Crop to window area + 200px margin on each side */
@@ -889,10 +915,153 @@ cJSON *tool_read_screen_text(const cJSON *params)
 
 /* ── launch_app ──────────────────────────────────────────────────────────── */
 
+static int is_headless_session_env(const char *name)
+{
+	static const char *reserved[] = {
+		"DISPLAY",
+		"XAUTHORITY",
+		"WAYLAND_DISPLAY",
+		"XDG_RUNTIME_DIR",
+		"DBUS_SESSION_BUS_ADDRESS",
+		"SESSION_MANAGER",
+		"XDG_SESSION_TYPE",
+		"GDK_BACKEND",
+		"QT_QPA_PLATFORM",
+		NULL
+	};
+
+	for (int i = 0; reserved[i]; i++) {
+		if (strcmp(name, reserved[i]) == 0) return 1;
+	}
+	return 0;
+}
+
+static int is_valid_env_name(const char *name)
+{
+	if (!name || !(isalpha((unsigned char)name[0]) || name[0] == '_'))
+		return 0;
+	for (int i = 1; name[i]; i++) {
+		if (!(isalnum((unsigned char)name[i]) || name[i] == '_')) return 0;
+	}
+	return 1;
+}
+
+static void kill_existing_processes(const char *pattern)
+{
+	pid_t pid = fork();
+	if (pid == 0) {
+		execlp("pkill", "pkill", "-f", pattern, (char *)NULL);
+		_exit(127);
+	}
+	if (pid > 0) waitpid(pid, NULL, 0);
+	usleep_ms(500);
+}
+
+static void report_launch_error(int fd, int error_number)
+{
+	while (write(fd, &error_number, sizeof(error_number)) < 0 && errno == EINTR) {}
+	_exit(127);
+}
+
+static int launch_detached(const char *command, const cJSON *args,
+	                       const cJSON *env, int headless,
+	                       char *error, size_t error_len)
+{
+	int status_pipe[2];
+	if (pipe2(status_pipe, O_CLOEXEC) != 0) {
+		snprintf(error, error_len, "could not create launcher status pipe: %s",
+			strerror(errno));
+		return -1;
+	}
+
+	pid_t launcher = fork();
+	if (launcher < 0) {
+		int fork_error = errno;
+		close(status_pipe[0]);
+		close(status_pipe[1]);
+		snprintf(error, error_len, "could not fork application launcher: %s",
+			strerror(fork_error));
+		return -1;
+	}
+	if (launcher == 0) {
+		close(status_pipe[0]);
+		pid_t app = fork();
+		if (app < 0) report_launch_error(status_pipe[1], errno);
+		if (app > 0) {
+			close(status_pipe[1]);
+			_exit(0);
+		}
+
+		if (setenv("DBUS_SESSION_BUS_ADDRESS", "", 1) != 0)
+			report_launch_error(status_pipe[1], errno);
+		if (env && cJSON_IsObject(env)) {
+			cJSON *item = NULL;
+			cJSON_ArrayForEach(item, env) {
+				if (cJSON_IsString(item) && is_valid_env_name(item->string) &&
+				    !(headless && is_headless_session_env(item->string))) {
+					if (setenv(item->string, item->valuestring, 1) != 0)
+						report_launch_error(status_pipe[1], errno);
+				}
+			}
+		}
+
+		int null_fd = open("/dev/null", O_RDWR);
+		if (null_fd < 0) report_launch_error(status_pipe[1], errno);
+		if (dup2(null_fd, STDIN_FILENO) < 0 ||
+		    dup2(null_fd, STDOUT_FILENO) < 0 ||
+		    dup2(null_fd, STDERR_FILENO) < 0)
+			report_launch_error(status_pipe[1], errno);
+		if (null_fd > STDERR_FILENO) close(null_fd);
+
+		int arg_count = args && cJSON_IsArray(args)
+			? cJSON_GetArraySize(args) : 0;
+		char **argv = calloc((size_t)arg_count + 2, sizeof(*argv));
+		if (!argv) report_launch_error(status_pipe[1], ENOMEM);
+		argv[0] = (char *)command;
+		int pos = 1;
+		for (int i = 0; i < arg_count; i++) {
+			cJSON *arg = cJSON_GetArrayItem(args, i);
+			if (cJSON_IsString(arg)) argv[pos++] = arg->valuestring;
+		}
+		argv[pos] = NULL;
+		execvp(command, argv);
+		report_launch_error(status_pipe[1], errno);
+	}
+
+	close(status_pipe[1]);
+	int status = 0;
+	while (waitpid(launcher, &status, 0) < 0) {
+		if (errno == EINTR) continue;
+		snprintf(error, error_len, "could not wait for application launcher: %s",
+			strerror(errno));
+		close(status_pipe[0]);
+		return -1;
+	}
+
+	int exec_error = 0;
+	ssize_t status_bytes;
+	do {
+		status_bytes = read(status_pipe[0], &exec_error, sizeof(exec_error));
+	} while (status_bytes < 0 && errno == EINTR);
+	close(status_pipe[0]);
+	if (status_bytes > 0) {
+		snprintf(error, error_len, "could not execute %s: %s",
+			command, strerror(exec_error));
+		return -1;
+	}
+	if (status_bytes < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		snprintf(error, error_len, "application launcher exited unexpectedly");
+		return -1;
+	}
+	return 0;
+}
+
 cJSON *tool_launch_app(const cJSON *params)
 {
 	const char *command = json_str(params, "command", "");
-	int kill_existing = json_bool(params, "killExisting", 1);
+	if (!command[0]) return mcp_tool_error_result("Missing 'command' parameter");
+	int headless = getenv("DESKPAL_HEADLESS_ACTIVE") != NULL;
+	int kill_existing = json_bool(params, "killExisting", headless ? 0 : 1);
 	int timeout = json_int(params, "timeout", 10);
 	const char *wait_title = json_str(params, "waitForWindow", NULL);
 
@@ -901,45 +1070,16 @@ cJSON *tool_launch_app(const cJSON *params)
 	basename = basename ? basename + 1 : command;
 
 	/* Kill existing */
-	if (kill_existing) {
-		char kill_cmd[256];
-		snprintf(kill_cmd, sizeof(kill_cmd), "pkill -f \"%s\" 2>/dev/null", basename);
-		system(kill_cmd);
-		usleep_ms(500);
+	if (kill_existing && !headless) {
+		kill_existing_processes(basename);
 	}
 
-	/* Build command with env */
-	char full_cmd[1024];
 	const cJSON *env = cJSON_GetObjectItem(params, "env");
-	int pos = 0;
-	pos += snprintf(full_cmd + pos, sizeof(full_cmd) - pos,
-		"DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=\"\" ");
-	if (env && cJSON_IsObject(env)) {
-		cJSON *item = NULL;
-		cJSON_ArrayForEach(item, env) {
-			if (cJSON_IsString(item)) {
-				pos += snprintf(full_cmd + pos, sizeof(full_cmd) - pos,
-					"%s=%s ", item->string, item->valuestring);
-			}
-		}
-	}
-
-	/* Build args */
 	const cJSON *args = cJSON_GetObjectItem(params, "args");
-	pos += snprintf(full_cmd + pos, sizeof(full_cmd) - pos, "%s", command);
-	if (args && cJSON_IsArray(args)) {
-		cJSON *arg = NULL;
-		cJSON_ArrayForEach(arg, args) {
-			if (cJSON_IsString(arg)) {
-				pos += snprintf(full_cmd + pos, sizeof(full_cmd) - pos,
-					" %s", arg->valuestring);
-			}
-		}
-	}
-	pos += snprintf(full_cmd + pos, sizeof(full_cmd) - pos, " &>/dev/null &");
-
-	/* Launch */
-	system(full_cmd);
+	char launch_error[256];
+	if (launch_detached(command, args, env, headless,
+	                    launch_error, sizeof(launch_error)) != 0)
+		return mcp_tool_error_result(launch_error);
 
 	/* Wait for window */
 	const char *search_title = wait_title ? wait_title : basename;
@@ -1094,6 +1234,8 @@ cJSON *tool_mouse_move(const cJSON *params)
 	if (wid) {
 		WindowInfo info;
 		if (x11_get_window_info(wid, &info) == 0) {
+			if (getenv("DESKPAL_HEADLESS_ACTIVE"))
+				x11_focus_window(wid);
 			int abs_x = info.x + x;
 			int abs_y = info.y + y;
 			if (x11_is_wayland()) {
@@ -1185,6 +1327,8 @@ cJSON *tool_mouse_down(const cJSON *params)
 	int y = json_int(params, "y", -1);
 
 	unsigned long wid = resolve_window(params);
+	if (wid && getenv("DESKPAL_HEADLESS_ACTIVE"))
+		x11_focus_window(wid);
 	if (wid && x >= 0 && y >= 0) {
 		WindowInfo info;
 		if (x11_get_window_info(wid, &info) == 0) {
@@ -1402,6 +1546,8 @@ cJSON *tool_hover_text(const cJSON *params)
 	int rel_y = hit.y + hit.height / 2;
 	int hover_x = info.x + rel_x;
 	int hover_y = info.y + rel_y;
+	if (getenv("DESKPAL_HEADLESS_ACTIVE"))
+		x11_focus_window(target);
 	if (x11_is_wayland()) {
 		x11_window_mouse_move(target, rel_x, rel_y);
 	} else {
@@ -1664,8 +1810,37 @@ extern void mcp_register_tool(const char *name, const char *description,
 
 void tools_register_all(void)
 {
+	mcp_register_tool("launch_isolated_app",
+		"Launch an app in a private Xvfb display for visual verification of a locally developed app without interrupting the user. "
+		"Use launch_app instead when the goal is to control an app on the user's existing desktop. "
+		"Returns a sessionId that must be passed to subsequent screenshot, window, and input tools.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"command\": {\"type\": \"string\", \"description\": \"Command to launch\"},"
+		"    \"args\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}},"
+		"    \"waitForWindow\": {\"type\": \"string\"},"
+		"    \"timeout\": {\"type\": \"number\", \"default\": 10},"
+		"    \"screenSize\": {\"type\": \"string\", \"default\": \"1920x1080\", \"description\": \"Virtual display size as WIDTHxHEIGHT\"},"
+		"    \"env\": {\"type\": \"object\"}"
+		"  },"
+		"  \"required\": [\"command\"]"
+		"}",
+		tool_launch_isolated_app);
+
+	mcp_register_tool("close_isolated_session",
+		"Close an isolated Xvfb verification session and all apps running in it. Call this when verification is complete.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"sessionId\": {\"type\": \"string\"}"
+		"  },"
+		"  \"required\": [\"sessionId\"]"
+		"}",
+		tool_close_isolated_session);
+
 	mcp_register_tool("screenshot",
-		"Capture a screenshot of a window or the entire screen. Returns base64 PNG.",
+		"Capture a screenshot of a window or screen. Omit sessionId for the user's desktop; use the sessionId from launch_isolated_app for private app verification. Returns base64 PNG.",
 		"{"
 		"  \"type\": \"object\","
 		"  \"properties\": {"
@@ -1677,7 +1852,7 @@ void tools_register_all(void)
 		tool_screenshot);
 
 	mcp_register_tool("list_windows",
-		"List all visible windows with IDs, titles, geometry, PID, and display scale.",
+		"List windows on the user's desktop by default, or in an isolated verification session when sessionId is supplied.",
 		"{"
 		"  \"type\": \"object\","
 		"  \"properties\": {"
@@ -1757,8 +1932,9 @@ void tools_register_all(void)
 		tool_read_screen_text);
 
 	mcp_register_tool("launch_app",
-		"Launch a desktop application, handling GApplication D-Bus delegation. "
-		"Kills existing instance, launches fresh, waits for window.",
+		"Launch an application on the user's visible desktop. Use this only when the goal requires controlling the existing desktop session. "
+		"For visual verification of a locally developed app without interrupting the user, use launch_isolated_app instead. "
+		"When sessionId is supplied, launch another app in that existing isolated session.",
 		"{"
 		"  \"type\": \"object\","
 		"  \"properties\": {"
@@ -1767,7 +1943,7 @@ void tools_register_all(void)
 		"    \"waitForWindow\": {\"type\": \"string\"},"
 		"    \"timeout\": {\"type\": \"number\", \"default\": 10},"
 		"    \"killExisting\": {\"type\": \"boolean\", \"default\": true},"
-		"    \"env\": {\"type\": \"object\"}"
+		"    \"env\": {\"type\": \"object\", \"description\": \"Environment variables; display/session routing keys are ignored inside isolated sessions\"}"
 		"  },"
 		"  \"required\": [\"command\"]"
 		"}",

@@ -7,7 +7,8 @@
   },
   "scripts": {
     "build": "meson setup build --reconfigure 2>/dev/null; ninja -C build",
-    "test": "python3 test/e2e_desktop.py && python3 test/e2e_sysmon.py"
+    "test": "python3 test/e2e_isolation.py && python3 test/e2e_desktop.py && python3 test/e2e_sysmon.py",
+    "test:isolation": "python3 test/e2e_isolation.py"
   },
   "repository": {
     "type": "git",

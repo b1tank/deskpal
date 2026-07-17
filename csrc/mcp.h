@@ -20,6 +20,9 @@ int mcp_run(void);
 /* Build a text content response for a tool call. Caller owns result. */
 cJSON *mcp_text_result(const char *text);
 
+/* Build a failed tool response with isError=true. Caller owns result. */
+cJSON *mcp_tool_error_result(const char *text);
+
 /* Build an image content response (base64 PNG). Caller owns result. */
 cJSON *mcp_image_result(const char *base64_png, const char *mime);
 

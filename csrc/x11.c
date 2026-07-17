@@ -22,7 +22,7 @@ xdo_t *g_xdo = NULL;  /* non-static: also used by screenshot.c */
 
 /* ── Init / cleanup ───────────────────────────────────────────────────────── */
 
-int x11_init(void)
+int x11_init(int enable_uinput)
 {
 	g_xdo = xdo_new(NULL);
 	if (!g_xdo) return -1;
@@ -32,7 +32,10 @@ int x11_init(void)
 	Display *dpy = g_xdo->xdpy;
 	int sw = dpy ? DisplayWidth(dpy, DefaultScreen(dpy))  : 3840;
 	int sh = dpy ? DisplayHeight(dpy, DefaultScreen(dpy)) : 2160;
-	if (uinput_init(sw, sh) == 0) {
+	if (!enable_uinput) {
+		fprintf(stderr, "deskpal: headless display, using XTest input (%dx%d)\n",
+			sw, sh);
+	} else if (uinput_init(sw, sh) == 0) {
 		fprintf(stderr, "deskpal: uinput pointer (%dx%d)%s\n",
 			sw, sh,
 			uinput_kbd_available() ? " + keyboard" : " (keyboard fallback: XTest)");
@@ -203,6 +206,12 @@ int x11_get_window_info(unsigned long wid, WindowInfo *out)
 
 int x11_focus_window(unsigned long wid)
 {
+	if (getenv("DESKPAL_HEADLESS_ACTIVE")) {
+		XRaiseWindow(g_xdo->xdpy, (Window)wid);
+		XFlush(g_xdo->xdpy);
+		return xdo_focus_window(g_xdo, (Window)wid);
+	}
+
 	/* Use both focus and activate for reliable keyboard delivery.
 	 * xdo_focus_window sets X11 input focus (needed for XTest keys),
 	 * xdo_activate_window raises the window in the stacking order. */
