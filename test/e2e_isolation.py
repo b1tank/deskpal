@@ -1,100 +1,31 @@
 #!/usr/bin/env python3
 """E2E test for goal-aware desktop versus isolated Xvfb routing."""
 
-import base64
 import json
+import atexit
 import os
 import re
 import signal
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
 import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DESKPAL = os.path.join(ROOT, "build", "deskpal")
+from deskpal_client import (
+    DESKPAL,
+    DeskpalClient,
+    png_is_opaque,
+    png_size,
+    start_xvfb,
+    stop_process,
+    text,
+    tool_by_name,
+)
+
 WINDOW_TITLE = "deskpal-isolation-e2e"
 SECOND_WINDOW_TITLE = "deskpal-isolation-e2e-second"
 COMPANION_WINDOW_TITLE = "deskpal-companion-e2e"
-
-
-class DeskpalClient:
-    def __init__(self, env, executable=DESKPAL):
-        self.proc = subprocess.Popen(
-            [executable],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
-        self.request_id = 0
-        self.call(
-            "initialize",
-            {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "e2e-isolation", "version": "1.0"},
-            },
-        )
-
-    def call(self, method, params):
-        self.request_id += 1
-        request = {
-            "jsonrpc": "2.0",
-            "id": self.request_id,
-            "method": method,
-            "params": params,
-        }
-        self.proc.stdin.write(json.dumps(request) + "\n")
-        self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
-        if not line.startswith("{"):
-            raise AssertionError(f"non-JSON data on MCP stdout: {line!r}")
-        return json.loads(line)
-
-    def tool(self, name, arguments=None):
-        response = self.call(
-            "tools/call", {"name": name, "arguments": arguments or {}}
-        )
-        return response["result"]
-
-    def close(self):
-        if self.proc.poll() is None:
-            self.proc.stdin.close()
-            self.proc.wait(timeout=5)
-        return self.proc.stderr.read()
-
-
-def text(result):
-    return result["content"][0]["text"]
-
-
-def png_size(result):
-    image = result["content"][0]
-    data = base64.b64decode(image["data"])
-    assert image["type"] == "image"
-    assert image["mimeType"] == "image/png"
-    assert data[:8] == bytes.fromhex("89504e470d0a1a0a")
-    return struct.unpack(">II", data[16:24])
-
-
-def png_is_opaque(result):
-    data = base64.b64decode(result["content"][0]["data"])
-    identified = subprocess.run(
-        ["identify", "-format", "%[opaque]", "png:-"],
-        input=data,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    )
-    return identified.stdout.strip().lower() == b"true"
-
-
-def tool_by_name(tools, name):
-    return next(tool for tool in tools if tool["name"] == name)
 
 
 def process_table():
@@ -174,16 +105,18 @@ def main():
         if not shutil.which(name)
     ]
     if missing:
-        print(f"SKIP: missing isolation test dependencies: {', '.join(missing)}")
-        return 0
-    if not os.environ.get("DISPLAY"):
-        print("SKIP: no desktop DISPLAY for the primary Deskpal server")
-        return 0
+        print(
+            f"FAIL: missing isolation test dependencies: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return 1
     if not os.path.isfile(DESKPAL):
         print("FAIL: build/deskpal does not exist; run ninja -C build", file=sys.stderr)
         return 1
 
     with tempfile.TemporaryDirectory(prefix="deskpal-isolation-test-") as temp_dir:
+        primary_xvfb, env = start_xvfb(temp_dir, "1280x800")
+        atexit.register(stop_process, primary_xvfb)
         sentinel = os.path.join(temp_dir, "host-screenshot-invoked")
         launch_sentinel = os.path.join(temp_dir, "shell-syntax-executed")
         runtime_probe_output = os.path.join(temp_dir, "runtime-probe-output")
@@ -205,14 +138,14 @@ def main():
             )
         os.chmod(runtime_probe, 0o755)
 
-        env = os.environ.copy()
-        env.pop("DESKPAL_HEADLESS_ACTIVE", None)
         env["PATH"] = temp_dir + os.pathsep + env["PATH"]
         env["DESKPAL_SCREENSHOT_SENTINEL"] = sentinel
         env["DESKPAL_RUNTIME_PROBE"] = runtime_probe_output
         env["XDG_RUNTIME_DIR"] = os.path.join(temp_dir, "host-runtime")
         env["WAYLAND_DISPLAY"] = "wayland-host"
-        client = DeskpalClient(env)
+        client = DeskpalClient(
+            env, args=["--no-uinput", "--allow-exec"], name="e2e-isolation"
+        )
         open_sessions = set()
         stderr = ""
         try:
@@ -377,12 +310,12 @@ def main():
                 "type_text",
                 {
                     "windowName": WINDOW_TITLE,
-                    "text": "test",
-                    "delay": 5500,
+                    "text": "timeout-extension-check-timeout-extension-check",
+                    "delay": 500,
                     **session_args,
                 },
             )
-            assert "Typed 4 characters" in text(typed), text(typed)
+            assert "Typed 47 characters" in text(typed), text(typed)
             session_after_typing = client.tool(
                 "find_window", {"name": WINDOW_TITLE, **session_args}
             )
@@ -542,7 +475,11 @@ def main():
 
         assert "headless display, using XTest input (1024x768)" in stderr, stderr
 
-        termination_client = DeskpalClient(env)
+        termination_client = DeskpalClient(
+            env,
+            args=["--no-uinput", "--allow-exec"],
+            name="e2e-parent-termination",
+        )
         children_before = direct_children(termination_client.proc.pid)
         termination_launch = termination_client.tool(
             "launch_isolated_app",
@@ -564,7 +501,11 @@ def main():
         termination_client.proc.stdout.close()
         termination_client.proc.stderr.close()
 
-        broken_output_client = DeskpalClient(env)
+        broken_output_client = DeskpalClient(
+            env,
+            args=["--no-uinput", "--allow-exec"],
+            name="e2e-broken-output",
+        )
         children_before = direct_children(broken_output_client.proc.pid)
         broken_output_launch = broken_output_client.tool(
             "launch_isolated_app",
@@ -600,7 +541,12 @@ def main():
 
         replaced_binary = os.path.join(temp_dir, "deskpal-replaced")
         shutil.copy2(DESKPAL, replaced_binary)
-        replaced_client = DeskpalClient(env, executable=replaced_binary)
+        replaced_client = DeskpalClient(
+            env,
+            executable=replaced_binary,
+            args=["--no-uinput", "--allow-exec"],
+            name="e2e-replaced-binary",
+        )
         os.unlink(replaced_binary)
         replaced_launch = replaced_client.tool(
             "launch_isolated_app",
@@ -618,6 +564,8 @@ def main():
         )
         assert "Closed isolated session" in text(replaced_closed), text(replaced_closed)
         replaced_client.close()
+        stop_process(primary_xvfb)
+        atexit.unregister(stop_process)
 
     print("PASS: desktop default and session-scoped Xvfb verification stay separate")
     return 0

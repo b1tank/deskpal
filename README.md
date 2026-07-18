@@ -10,8 +10,8 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 
 | Tool | Description |
 |------|-------------|
-| `screenshot` | Capture any window or full screen as PNG |
-| `list_windows` | List all visible windows with IDs, titles, geometry, PID |
+| `screenshot` | Capture any window or full screen as PNG; optionally downscale with source-coordinate metadata |
+| `list_windows` | List top-level app windows with IDs, titles, `WM_CLASS`, geometry, PID; optionally include recursive helpers/dialogs |
 | `find_window` | Find a window by title substring |
 | `focus_window` | Bring a window to front and give it input focus |
 | `click` | Click at (x, y) relative to a window. Supports left/right/middle buttons |
@@ -40,6 +40,9 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 - **Screenshots**: XCB `GetImage` for window capture, `gnome-screenshot` fallback for full-screen on Wayland, ImageMagick `import` fallback for transient dialogs
 - **OCR**: Tesseract with 2x upscaling, normal + inverted passes for dark themes, position-based multi-word matching
 - **Protocol**: JSON-RPC 2.0 over stdio (MCP 2024-11-05)
+- **Arbitration**: the first visible-desktop mutation acquires a per-user
+  machine lock until that deskpal MCP process exits; read-only tools and
+  private Xvfb sessions remain available to other clients
 
 ## Prerequisites
 
@@ -116,6 +119,12 @@ Calls without `sessionId` always continue to target the user's desktop. Call
 `close_isolated_session` when verification is complete; Deskpal also closes
 all remaining sessions when the MCP server exits.
 
+Visible-desktop mutations and all process-launch tools are serialized across deskpal processes. If another
+MCP host already holds control, the tool returns an error naming the owner
+instead of racing the pointer or keyboard. The lock is lazy: window listing,
+OCR, screenshots, and interactions inside an existing private session do not
+claim it; creating that private session does.
+
 Isolated children clear host Wayland/session routing, disable `/dev/uinput`,
 and use XTest only against their private X server. Display, Xauthority,
 Wayland, D-Bus, and GUI-backend overrides passed through the tool API are
@@ -146,7 +155,8 @@ expand deskpal's blast radius beyond "drive the desktop":
 | `--allow-fs` | `read_file` | Read arbitrary files from disk |
 | `--allow-exec` | `exec` | Run short shell commands with a timeout |
 
-Without the flags the tools are still listed in `tools/list` but
+`--allow-exec` also gates `launch_app` and `launch_isolated_app`, because both
+execute an arbitrary command with structured arguments. Without the flags the tools are still listed in `tools/list` but
 return a "disabled. Start deskpal with `--allow-…`" message. Even
 with `--allow-fs`, paths under `/etc/shadow`, `/etc/sudoers`,
 `/root/`, and `/proc/self/maps` are refused.
@@ -154,20 +164,29 @@ with `--allow-fs`, paths under `/etc/shadow`, `/etc/sudoers`,
 ## Testing
 
 ```bash
-# Hybrid desktop/Xvfb routing test (does not manipulate the active desktop)
+# Build and run all deterministic, desktop-safe tests
+npm run build
+npm test
+
+# Repeat the safe suite with ASan + UBSan
+npm run test:asan
+
+# Focused safe suites
 npm run test:isolation
+npm run test:computer-use
 
-# Canonical E2E test against GNOME System Monitor (41 tests)
-GDK_BACKEND=x11 gnome-system-monitor &
-python3 test/e2e_sysmon.py
-
-# General desktop interaction test (21 tests)
-python3 test/e2e_desktop.py
+# Live GNOME tests (manipulate the visible desktop)
+npm run test:live
 ```
+
+See [test/README.md](test/README.md) for prerequisites and test-writing
+guidance. The detailed comparison with Claude's built-in computer use and the
+north-star architecture plan are in
+[docs/computer-use-parity.md](docs/computer-use-parity.md).
 
 ## Compatibility
 
-- **Display**: X11, Xwayland (GNOME Wayland with Xwayland works), or isolated Xvfb
+- **Display**: X11, Xwayland (GNOME Wayland with Xwayland works), or isolated Xvfb. Native Wayland-only windows are not yet discoverable/capturable.
 - **HiDPI**: Handles display scaling (tested at 192 DPI / 2x scale)
 - **Apps**: Any X11 window — GTK, Qt, Electron, terminal apps, games
 - **Dialogs**: Finds and interacts with transient/child windows

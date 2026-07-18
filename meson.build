@@ -34,6 +34,7 @@ core_src = files(
   'csrc/ocr.c',
   'csrc/tools.c',
   'csrc/sessions.c',
+  'csrc/control.c',
 )
 
 c_args = ['-D_GNU_SOURCE']

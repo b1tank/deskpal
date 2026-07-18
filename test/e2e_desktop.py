@@ -33,7 +33,7 @@ os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 class DeskpalClient:
     def __init__(self):
         self.proc = subprocess.Popen(
-            [DESKPAL],
+            [DESKPAL, '--allow-exec'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             cwd=os.path.dirname(DESKPAL))
         self._id = 0
@@ -86,37 +86,68 @@ class TestRunner:
     def __init__(self):
         self.passed = 0
         self.failed = 0
+        self.blocked = 0
         self.results = []
 
     def run(self, name, fn):
         t0 = time.time()
         try:
-            ok, detail = fn()
+            outcome, detail = fn()
             dt = time.time() - t0
-            if ok:
+            if outcome == 'blocked':
+                self.blocked += 1
+                print(f'  \033[33mBLOCK\033[0m {name}  ({dt:.1f}s) {detail}')
+                self.results.append((name, 'blocked', detail))
+            elif outcome:
                 self.passed += 1
                 print(f'  \033[32mPASS\033[0m  {name}  ({dt:.1f}s) {detail}')
             else:
                 self.failed += 1
                 print(f'  \033[31mFAIL\033[0m  {name}  ({dt:.1f}s) {detail}')
-                self.results.append((name, detail))
+                self.results.append((name, 'failed', detail))
         except Exception as e:
             dt = time.time() - t0
             self.failed += 1
             msg = str(e)[:80]
             print(f'  \033[31mFAIL\033[0m  {name}  ({dt:.1f}s) EXCEPTION: {msg}')
-            self.results.append((name, f'EXCEPTION: {msg}'))
+            self.results.append((name, 'failed', f'EXCEPTION: {msg}'))
 
     def summary(self):
-        total = self.passed + self.failed
+        total = self.passed + self.failed + self.blocked
         print(f'\n{"=" * 60}')
-        print(f'Results: {self.passed} passed, {self.failed} failed, {total} total')
+        print(
+            f'Results: {self.passed} passed, {self.failed} failed, '
+            f'{self.blocked} blocked, {total} total'
+        )
         if self.results:
-            print('Failed:')
-            for name, detail in self.results:
-                print(f'  - {name}: {detail}')
+            for name, status, detail in self.results:
+                print(f'  - {status}: {name}: {detail}')
         print(f'{"=" * 60}')
-        return self.failed == 0
+        return self.failed == 0 and self.blocked == 0
+
+
+def has_unmapped_x11_compat_window(title):
+    tree = subprocess.run(
+        ['xwininfo', '-root', '-tree'],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'DISPLAY': os.environ.get('DISPLAY', ':0')},
+    )
+    for line in tree.stdout.splitlines():
+        if title.lower() not in line.lower():
+            continue
+        fields = line.strip().split()
+        if not fields or not fields[0].startswith('0x'):
+            continue
+        info = subprocess.run(
+            ['xwininfo', '-id', fields[0]],
+            capture_output=True,
+            text=True,
+            env={**os.environ, 'DISPLAY': os.environ.get('DISPLAY', ':0')},
+        )
+        if 'Map State: IsUnMapped' in info.stdout:
+            return True
+    return False
 
 
 def main():
@@ -132,6 +163,7 @@ def main():
 
     d = DeskpalClient()
     t = TestRunner()
+    dialog_available = False
 
     # ── Phase 1: Window discovery ────────────────────────────────────────
 
@@ -206,18 +238,30 @@ def main():
 
     def test_find_dialog():
         """Find the transient dialog window by its title."""
+        nonlocal dialog_available
         r = d.tool('find_window', {'name': 'open files'})
-        ok = 'open files' in r.lower() and 'Size' in r
-        return ok, r[:80]
+        dialog_available = 'open files' in r.lower() and 'Size' in r
+        if not dialog_available:
+            if has_unmapped_x11_compat_window('Search for Open Files'):
+                return 'blocked', (
+                    'visible dialog is native Wayland; current backend only sees '
+                    'its unmapped X11 compatibility window'
+                )
+            return False, r[:80]
+        return True, r[:80]
     t.run('find_window: dialog by partial name', test_find_dialog)
 
     def test_screenshot_dialog():
+        if not dialog_available:
+            return 'blocked', 'depends on native-Wayland dialog capture'
         path = d.screenshot('02_open_files', 'open files')
         ok = path is not None
         return ok, path or 'no screenshot'
     t.run('screenshot: dialog window', test_screenshot_dialog)
 
     def test_ocr_dialog():
+        if not dialog_available:
+            return 'blocked', 'depends on native-Wayland dialog capture'
         r = d.tool('read_screen_text', {'windowName': 'open files'})
         ok = 'Process' in r or 'Case' in r or 'bash' in r.lower()
         return ok, r[:80]
@@ -225,6 +269,8 @@ def main():
 
     def test_type_in_dialog():
         """Click search field and type to filter."""
+        if not dialog_available:
+            return 'blocked', 'depends on native-Wayland dialog input'
         d.tool('click', {'windowName': 'open files', 'x': 500, 'y': 40})
         time.sleep(0.3)
         d.tool('key_press', {'windowName': 'open files', 'keys': 'ctrl+a'})
@@ -240,6 +286,9 @@ def main():
 
     def test_close_dialog():
         """Close dialog with Alt+F4."""
+        if not dialog_available:
+            d.tool('key_press', {'keys': 'Escape'})
+            return 'blocked', 'depends on native-Wayland dialog input'
         # Escape may not close the dialog if it has focus on a text field,
         # so use Alt+F4 which reliably closes the window
         d.tool('key_press', {'windowName': 'open files', 'keys': 'alt+F4'})

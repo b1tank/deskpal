@@ -15,8 +15,10 @@
 typedef struct {
 	unsigned long id;
 	char          title[256];
+	char          app_class[128];
 	int           x, y;
 	int           width, height;
+	int           viewable;
 	long          pid;
 } WindowInfo;
 
@@ -28,11 +30,17 @@ void x11_cleanup(void);
 /* ── Window management ────────────────────────────────────────────────────── */
 
 /* List visible windows. Returns count, fills array up to max_count.
- * If name_filter is non-NULL, only include windows whose title contains it. */
-int x11_list_windows(WindowInfo *out, int max_count, const char *name_filter);
+ * If name_filter is non-NULL, only include windows whose title contains it.
+ * include_all uses recursive X11 discovery instead of the window manager's
+ * top-level client list, which is useful for dialogs and helper windows. */
+int x11_list_windows(WindowInfo *out, int max_count, const char *name_filter,
+	                 int include_all);
 
 /* Find best-matching window by name. Returns window ID or 0. */
 unsigned long x11_find_window(const char *name);
+
+/* Find a managed application window by title or WM_CLASS. */
+unsigned long x11_find_app(const char *name);
 
 /* Get info for a specific window. Returns 0 on success. */
 int x11_get_window_info(unsigned long wid, WindowInfo *out);

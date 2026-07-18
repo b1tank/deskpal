@@ -9,6 +9,7 @@
 #include "ocr.h"
 #include "sessions.h"
 #include "tools.h"
+#include "control.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -33,6 +34,7 @@ static void print_usage(void)
 		"Options:\n"
 		"  --allow-fs      Enable read_file tool (off by default)\n"
 		"  --allow-exec    Enable exec tool (off by default)\n"
+		"  --no-uinput     Use XTest only; intended for nested/test displays\n"
 		"  -h, --help      Show this help and exit\n");
 }
 
@@ -105,6 +107,7 @@ static int reexec_headless(int argc, char **argv, int width, int height)
 int main(int argc, char **argv)
 {
 	int xvfb_child = 0;
+	int disable_uinput = 0;
 	int screen_width = 1920;
 	int screen_height = 1080;
 
@@ -121,6 +124,8 @@ int main(int argc, char **argv)
 			deskpal_allow_fs = 1;
 		} else if (strcmp(argv[i], "--allow-exec") == 0) {
 			deskpal_allow_exec = 1;
+		} else if (strcmp(argv[i], "--no-uinput") == 0) {
+			disable_uinput = 1;
 		} else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
 			print_usage();
 			return 0;
@@ -130,17 +135,17 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
+	if (!xvfb_child) unsetenv(DESKPAL_HEADLESS_ENV);
 
 	if (xvfb_child && !getenv(DESKPAL_HEADLESS_ENV)) {
 		if (reexec_headless(argc, argv, screen_width, screen_height) != 0)
 			return 1;
 	}
-
 	/* Disable stdout buffering for MCP stdio transport */
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 
-	if (x11_init(!xvfb_child) != 0) {
+	if (x11_init(!xvfb_child && !disable_uinput) != 0) {
 		fprintf(stderr, "deskpal: failed to connect to X11 display\n");
 		return 1;
 	}
@@ -157,6 +162,7 @@ int main(int argc, char **argv)
 	int rc = mcp_run();
 
 	sessions_cleanup_all();
+	control_cleanup();
 	ocr_cleanup();
 	x11_cleanup();
 	return rc;

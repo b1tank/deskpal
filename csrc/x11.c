@@ -17,13 +17,31 @@
 #include <xdo.h>
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include <X11/Xutil.h>
 
 xdo_t *g_xdo = NULL;  /* non-static: also used by screenshot.c */
+
+static int deskpal_x_error_handler(Display *display, XErrorEvent *event)
+{
+	/* Windows and transient drawables can disappear between recursive search,
+	 * geometry, and screenshot requests. These races are normal on a live
+	 * desktop and must not let Xlib's default handler terminate the MCP server. */
+	if (event->error_code == BadWindow || event->error_code == BadDrawable)
+		return 0;
+
+	char message[128];
+	XGetErrorText(display, event->error_code, message, sizeof(message));
+	fprintf(stderr,
+		"deskpal: X11 error: %s (request=%u.%u resource=0x%lx)\n",
+		message, event->request_code, event->minor_code, event->resourceid);
+	return 0;
+}
 
 /* ── Init / cleanup ───────────────────────────────────────────────────────── */
 
 int x11_init(int enable_uinput)
 {
+	XSetErrorHandler(deskpal_x_error_handler);
 	g_xdo = xdo_new(NULL);
 	if (!g_xdo) return -1;
 
@@ -33,7 +51,9 @@ int x11_init(int enable_uinput)
 	int sw = dpy ? DisplayWidth(dpy, DefaultScreen(dpy))  : 3840;
 	int sh = dpy ? DisplayHeight(dpy, DefaultScreen(dpy)) : 2160;
 	if (!enable_uinput) {
-		fprintf(stderr, "deskpal: headless display, using XTest input (%dx%d)\n",
+		fprintf(stderr, "deskpal: %s, using XTest input (%dx%d)\n",
+			getenv("DESKPAL_HEADLESS_ACTIVE")
+				? "headless display" : "uinput disabled",
 			sw, sh);
 	} else if (uinput_init(sw, sh) == 0) {
 		fprintf(stderr, "deskpal: uinput pointer (%dx%d)%s\n",
@@ -61,97 +81,182 @@ static int fill_window_info(Window wid, WindowInfo *out)
 {
 	memset(out, 0, sizeof(*out));
 	out->id = wid;
+	Display *display = g_xdo->xdpy;
+	XWindowAttributes attributes;
+	if (!XGetWindowAttributes(display, wid, &attributes)) return -1;
 
 	/* Title */
-	unsigned char *name = NULL;
-	int name_len = 0;
-	int name_type = 0;
-	if (xdo_get_window_name(g_xdo, wid, &name, &name_len, &name_type) == 0
-	    && name) {
-		int copy = name_len < (int)sizeof(out->title) - 1
-		           ? name_len : (int)sizeof(out->title) - 1;
-		memcpy(out->title, name, copy);
-		out->title[copy] = '\0';
-		XFree(name);
+	Atom utf8 = XInternAtom(display, "UTF8_STRING", True);
+	Atom net_wm_name = XInternAtom(display, "_NET_WM_NAME", True);
+	if (utf8 != None && net_wm_name != None) {
+		Atom actual_type = None;
+		int actual_format = 0;
+		unsigned long item_count = 0;
+		unsigned long bytes_after = 0;
+		unsigned char *value = NULL;
+		if (XGetWindowProperty(display, wid, net_wm_name, 0,
+		                       sizeof(out->title), False, utf8,
+		                       &actual_type, &actual_format, &item_count,
+		                       &bytes_after, &value) == Success && value) {
+			size_t copy = item_count < sizeof(out->title) - 1
+				? item_count : sizeof(out->title) - 1;
+			memcpy(out->title, value, copy);
+			out->title[copy] = '\0';
+			XFree(value);
+		}
+	}
+	if (!out->title[0]) {
+		char *name = NULL;
+		if (XFetchName(display, wid, &name) && name) {
+			snprintf(out->title, sizeof(out->title), "%s", name);
+			XFree(name);
+		}
+	}
+
+	XClassHint class_hint = { 0 };
+	if (XGetClassHint(display, wid, &class_hint)) {
+		const char *app_class = class_hint.res_class
+			? class_hint.res_class : class_hint.res_name;
+		if (app_class)
+			snprintf(out->app_class, sizeof(out->app_class), "%s", app_class);
+		if (class_hint.res_name == class_hint.res_class) {
+			if (class_hint.res_name) XFree(class_hint.res_name);
+		} else {
+			if (class_hint.res_name) XFree(class_hint.res_name);
+			if (class_hint.res_class) XFree(class_hint.res_class);
+		}
 	}
 
 	/* Geometry */
-	unsigned int w = 0, h = 0;
-	int x = 0, y = 0;
-	/* getwindowlocation gives top-left in screen coords */
-	if (xdo_get_window_location(g_xdo, wid, &x, &y, NULL) == 0) {
+	int x = attributes.x;
+	int y = attributes.y;
+	Window translated_child = None;
+	if (XTranslateCoordinates(display, wid, DefaultRootWindow(display), 0, 0,
+	                          &x, &y, &translated_child)) {
 		out->x = x;
 		out->y = y;
 	}
-	if (xdo_get_window_size(g_xdo, wid, &w, &h) == 0) {
-		out->width = (int)w;
-		out->height = (int)h;
-	}
+	out->width = attributes.width;
+	out->height = attributes.height;
+	out->viewable = attributes.map_state == IsViewable;
 
 	/* PID */
-	int pid = 0;
-	if (xdo_get_pid_window(g_xdo, wid) > 0)
-		pid = xdo_get_pid_window(g_xdo, wid);
-	out->pid = pid;
+	Atom pid_atom = XInternAtom(display, "_NET_WM_PID", True);
+	if (pid_atom != None) {
+		Atom actual_type = None;
+		int actual_format = 0;
+		unsigned long item_count = 0;
+		unsigned long bytes_after = 0;
+		unsigned char *value = NULL;
+		if (XGetWindowProperty(display, wid, pid_atom, 0, 1, False, XA_CARDINAL,
+		                       &actual_type, &actual_format, &item_count,
+		                       &bytes_after, &value) == Success && value) {
+			if (actual_format == 32 && item_count >= 1)
+				out->pid = (long)*(unsigned long *)value;
+			XFree(value);
+		}
+	}
 
 	return 0;
 }
 
 /* ── Window management ────────────────────────────────────────────────────── */
 
-int x11_list_windows(WindowInfo *out, int max_count, const char *name_filter)
+static int append_window(WindowInfo *out, int max_count, int count, Window wid,
+	                     const char *name_filter, int match_class)
 {
-	xdo_search_t search;
-	memset(&search, 0, sizeof(search));
-	search.require = SEARCH_ANY;
-	search.searchmask = SEARCH_NAME;
-	if (name_filter && name_filter[0]) {
-		search.winname = name_filter;
-	} else {
-		/* Match any window that has a name */
-		search.winname = "";
-	}
-	search.max_depth = -1;
+	if (count >= max_count) return count;
+	WindowInfo info;
+	if (fill_window_info(wid, &info) != 0) return count;
 
-	Window *results = NULL;
-	unsigned int nresults = 0;
-	if (xdo_search_windows(g_xdo, &search, &results, &nresults) != 0)
-		return 0;
+	if (!info.viewable || info.width < 10 || info.height < 10 ||
+	    info.title[0] == '\0')
+		return count;
+	if (name_filter && name_filter[0] &&
+	    !strcasestr(info.title, name_filter) &&
+	    !(match_class && strcasestr(info.app_class, name_filter)))
+		return count;
 
-	int count = 0;
-	for (unsigned int i = 0; i < nresults && count < max_count; i++) {
-		WindowInfo info;
-		fill_window_info(results[i], &info);
-
-		/* Skip tiny windows (hidden GDK helpers, etc.) */
-		if (info.width < 10 || info.height < 10) continue;
-		/* Skip untitled windows */
-		if (info.title[0] == '\0') continue;
-
-		out[count++] = info;
-	}
-
-	free(results);
+	out[count++] = info;
 	return count;
 }
 
-unsigned long x11_find_window(const char *name)
-{
-	xdo_search_t search;
-	memset(&search, 0, sizeof(search));
-	search.require = SEARCH_ANY;
-	search.searchmask = SEARCH_NAME;
-	search.winname = name;
-	search.max_depth = -1;
+static int list_tree(Window root, WindowInfo *out, int max_count, int count,
+	                 const char *name_filter, int match_class, int depth);
 
-	Window *results = NULL;
-	unsigned int nresults = 0;
-	if (xdo_search_windows(g_xdo, &search, &results, &nresults) != 0 ||
-	    nresults == 0) {
-		free(results);
-		return 0;
+static int list_ewmh_clients(WindowInfo *out, int max_count,
+	                         const char *name_filter, int match_class)
+{
+	Display *display = g_xdo->xdpy;
+	Window root = DefaultRootWindow(display);
+	Atom client_list = XInternAtom(display, "_NET_CLIENT_LIST", True);
+	if (client_list == None) return -1;
+
+	Atom actual_type = None;
+	int actual_format = 0;
+	unsigned long item_count = 0;
+	unsigned long bytes_after = 0;
+	unsigned char *data = NULL;
+	int status = XGetWindowProperty(display, root, client_list, 0, ~0L, False,
+	                                XA_WINDOW, &actual_type, &actual_format,
+	                                &item_count, &bytes_after, &data);
+	if (status != Success || actual_type != XA_WINDOW || actual_format != 32) {
+		if (data) XFree(data);
+		return -1;
 	}
 
+	Window *windows = (Window *)data;
+	int count = 0;
+	for (unsigned long i = 0; i < item_count && count < max_count; i++) {
+		XWindowAttributes attributes;
+		if (!XGetWindowAttributes(display, windows[i], &attributes) ||
+		    attributes.map_state != IsViewable)
+			continue;
+		count = append_window(out, max_count, count, windows[i], name_filter,
+		                      match_class);
+	}
+	XFree(data);
+	return count;
+}
+
+static int list_tree(Window root, WindowInfo *out, int max_count, int count,
+	                 const char *name_filter, int match_class, int depth)
+{
+	if (depth > 64 || count >= max_count) return count;
+	Window returned_root = None;
+	Window parent = None;
+	Window *children = NULL;
+	unsigned int child_count = 0;
+	if (!XQueryTree(g_xdo->xdpy, root, &returned_root, &parent,
+	                &children, &child_count)) {
+		if (children) XFree(children);
+		return count;
+	}
+
+	for (unsigned int i = 0; i < child_count && count < max_count; i++) {
+		count = append_window(out, max_count, count, children[i], name_filter,
+		                      match_class);
+		count = list_tree(children[i], out, max_count, count, name_filter,
+		                  match_class, depth + 1);
+	}
+	if (children) XFree(children);
+	return count;
+}
+
+int x11_list_windows(WindowInfo *out, int max_count, const char *name_filter,
+	                 int include_all)
+{
+	if (!include_all) {
+		int ewmh_count = list_ewmh_clients(out, max_count, name_filter, 1);
+		if (ewmh_count >= 0) return ewmh_count;
+	}
+	return list_tree(DefaultRootWindow(g_xdo->xdpy), out, max_count, 0,
+	                 name_filter, 1, 0);
+}
+
+static unsigned long find_best_match(WindowInfo *results, int nresults,
+	                                const char *name, int match_class)
+{
 	/* Find best match. Scoring:
 	 * - Exact title match with largest area wins immediately
 	 * - Otherwise prefer shorter titles (more specific partial match)
@@ -161,16 +266,21 @@ unsigned long x11_find_window(const char *name)
 	int best_area = 0;
 	int best_exact = 0;  /* exact title match flag */
 
-	for (unsigned int i = 0; i < nresults; i++) {
-		WindowInfo info;
-		fill_window_info(results[i], &info);
+	for (int i = 0; i < nresults; i++) {
+		WindowInfo *info = &results[i];
+		/* GTK/GDK processes commonly publish a 20x20 titled helper before
+		 * their real managed window appears. Never let that helper satisfy a
+		 * launch/find request; wait for the application or a usable dialog. */
+		if (info->width <= 32 && info->height <= 32) continue;
 
-		if (info.width < 10 || info.height < 10) continue;
-		if (info.title[0] == '\0') continue;
-
-		int is_exact = (strcmp(info.title, name) == 0);
-		int title_len = (int)strlen(info.title);
-		int area = info.width * info.height;
+		int title_match = strcasestr(info->title, name) != NULL;
+		int class_match = match_class &&
+			strcasestr(info->app_class, name) != NULL;
+		if (!title_match && !class_match) continue;
+		int is_exact = strcmp(info->title, name) == 0 ||
+			(match_class && strcasecmp(info->app_class, name) == 0);
+		int title_len = (int)strlen(info->title);
+		int area = info->width * info->height;
 
 		/* Prefer: exact > partial, then largest area for exact,
 		 * shortest title for partial, then largest area */
@@ -188,15 +298,33 @@ unsigned long x11_find_window(const char *name)
 		}
 
 		if (!dominated) {
-			best = results[i];
+			best = info->id;
 			best_title_len = title_len;
 			best_area = area;
 			best_exact = is_exact;
 		}
 	}
 
-	free(results);
 	return best;
+}
+
+unsigned long x11_find_window(const char *name)
+{
+	WindowInfo results[256];
+	int count = list_tree(DefaultRootWindow(g_xdo->xdpy), results, 256, 0,
+	                     name, 0, 0);
+	return find_best_match(results, count, name, 0);
+}
+
+unsigned long x11_find_app(const char *name)
+{
+	WindowInfo results[256];
+	int count = list_ewmh_clients(results, 256, name, 1);
+	if (count < 0) {
+		count = list_tree(DefaultRootWindow(g_xdo->xdpy), results, 256, 0,
+		                  name, 1, 0);
+	}
+	return find_best_match(results, count, name, 1);
 }
 
 int x11_get_window_info(unsigned long wid, WindowInfo *out)
@@ -208,15 +336,18 @@ int x11_focus_window(unsigned long wid)
 {
 	if (getenv("DESKPAL_HEADLESS_ACTIVE")) {
 		XRaiseWindow(g_xdo->xdpy, (Window)wid);
-		XFlush(g_xdo->xdpy);
-		return xdo_focus_window(g_xdo, (Window)wid);
+		int result = xdo_focus_window(g_xdo, (Window)wid);
+		XSync(g_xdo->xdpy, False);
+		return result;
 	}
 
 	/* Use both focus and activate for reliable keyboard delivery.
 	 * xdo_focus_window sets X11 input focus (needed for XTest keys),
 	 * xdo_activate_window raises the window in the stacking order. */
-	xdo_focus_window(g_xdo, (Window)wid);
-	return xdo_activate_window(g_xdo, (Window)wid);
+	int focus_result = xdo_focus_window(g_xdo, (Window)wid);
+	int activate_result = xdo_activate_window(g_xdo, (Window)wid);
+	XSync(g_xdo->xdpy, False);
+	return focus_result == 0 || activate_result == 0 ? 0 : focus_result;
 }
 
 int x11_resize_window(unsigned long wid, int width, int height)

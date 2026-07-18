@@ -22,6 +22,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <stdarg.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <sys/time.h>     /* setitimer for tool_exec deadline */
 
@@ -78,8 +80,17 @@ static unsigned long resolve_window(const cJSON *params)
 	const char *wid_str = json_str(params, "windowId", NULL);
 	const char *wname = json_str(params, "windowName", NULL);
 
-	if (wid_str) return strtoul(wid_str, NULL, 0);
-	if (wname) return x11_find_window(wname);
+	if (wid_str && wid_str[0]) {
+		char *end = NULL;
+		errno = 0;
+		unsigned long wid = strtoul(wid_str, &end, 0);
+		WindowInfo info;
+		if (errno != 0 || end == wid_str || *end != '\0' || wid == 0 ||
+		    x11_get_window_info(wid, &info) != 0 || !info.viewable)
+			return 0;
+		return wid;
+	}
+	if (wname && wname[0]) return x11_find_window(wname);
 	return 0;
 }
 
@@ -87,13 +98,46 @@ static int explicit_window_requested(const cJSON *params)
 {
 	const cJSON *wid = params ? cJSON_GetObjectItem(params, "windowId") : NULL;
 	const cJSON *name = params ? cJSON_GetObjectItem(params, "windowName") : NULL;
-	return (wid && cJSON_IsString(wid) && wid->valuestring[0]) ||
-	       (name && cJSON_IsString(name) && name->valuestring[0]);
+	return wid != NULL || name != NULL;
+}
+
+static int window_is_viewable(unsigned long wid)
+{
+	WindowInfo info;
+	return wid != 0 && x11_get_window_info(wid, &info) == 0 && info.viewable;
+}
+
+static int revalidate_target(const cJSON *params, unsigned long expected,
+	                         WindowInfo *info)
+{
+	unsigned long current = explicit_window_requested(params)
+		? resolve_window(params) : expected;
+	if (current == 0 || current != expected ||
+	    x11_get_window_info(current, info) != 0 || !info->viewable)
+		return -1;
+	return 0;
 }
 
 static void usleep_ms(int ms)
 {
 	usleep(ms * 1000);
+}
+
+static void append_text(char *buffer, size_t buffer_len, size_t *position,
+	                    const char *format, ...)
+{
+	if (*position >= buffer_len) return;
+	va_list args;
+	va_start(args, format);
+	int written = vsnprintf(buffer + *position, buffer_len - *position,
+	                        format, args);
+	va_end(args);
+	if (written < 0) return;
+	size_t available = buffer_len - *position;
+	if ((size_t)written >= available)
+		*position = buffer_len - 1;
+	else
+		*position += (size_t)written;
 }
 
 static int capture_root_to_file(const char *path)
@@ -125,11 +169,182 @@ static int capture_root_to_file(const char *path)
 	return access(path, R_OK) == 0 ? 0 : -1;
 }
 
+static int png_dimensions(const uint8_t *png, size_t png_len,
+	                      int *width, int *height)
+{
+	static const uint8_t signature[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+	if (!png || png_len < 24 || memcmp(png, signature, sizeof(signature)) != 0)
+		return -1;
+	*width = (int)((uint32_t)png[16] << 24 | (uint32_t)png[17] << 16 |
+	               (uint32_t)png[18] << 8 | png[19]);
+	*height = (int)((uint32_t)png[20] << 24 | (uint32_t)png[21] << 16 |
+	                (uint32_t)png[22] << 8 | png[23]);
+	return *width > 0 && *height > 0 ? 0 : -1;
+}
+
+static int read_binary_file(const char *path, uint8_t **data, size_t *length)
+{
+	FILE *file = fopen(path, "rb");
+	if (!file) return -1;
+	if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return -1; }
+	long size = ftell(file);
+	if (size <= 0 || fseek(file, 0, SEEK_SET) != 0) {
+		fclose(file);
+		return -1;
+	}
+	uint8_t *buffer = malloc((size_t)size);
+	if (!buffer) { fclose(file); return -1; }
+	size_t read_count = fread(buffer, 1, (size_t)size, file);
+	int close_result = fclose(file);
+	if (read_count != (size_t)size || close_result != 0) {
+		free(buffer);
+		return -1;
+	}
+	*data = buffer;
+	*length = (size_t)size;
+	return 0;
+}
+
+static int write_all(int fd, const uint8_t *data, size_t length)
+{
+	size_t offset = 0;
+	while (offset < length) {
+		ssize_t written = write(fd, data + offset, length - offset);
+		if (written < 0 && errno == EINTR) continue;
+		if (written <= 0) return -1;
+		offset += (size_t)written;
+	}
+	return 0;
+}
+
+static long long monotonic_milliseconds(void)
+{
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (long long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static int wait_child_deadline(pid_t child, int timeout_ms, int *status)
+{
+	long long deadline = monotonic_milliseconds() + timeout_ms;
+	for (;;) {
+		pid_t waited = waitpid(child, status, WNOHANG);
+		if (waited == child) return 0;
+		if (waited < 0 && errno == EINTR) continue;
+		if (waited < 0) return -1;
+		if (monotonic_milliseconds() >= deadline) {
+			kill(child, SIGTERM);
+			for (int i = 0; i < 20; i++) {
+				do {
+					waited = waitpid(child, status, WNOHANG);
+				} while (waited < 0 && errno == EINTR);
+				if (waited == child) return 1;
+				usleep(50000);
+			}
+			kill(child, SIGKILL);
+			do {
+				waited = waitpid(child, status, 0);
+			} while (waited < 0 && errno == EINTR);
+			return 1;
+		}
+		usleep(10000);
+	}
+}
+
+static int resize_png(uint8_t **png, size_t *png_len,
+	                  int source_width, int source_height,
+	                  int max_width, int max_height,
+	                  int *image_width, int *image_height)
+{
+	double scale = 1.0;
+	if (max_width > 0 && source_width > max_width)
+		scale = (double)max_width / source_width;
+	if (max_height > 0 && source_height * scale > max_height)
+		scale = (double)max_height / source_height;
+
+	*image_width = source_width;
+	*image_height = source_height;
+	if (scale >= 1.0) return 0;
+
+	int target_width = (int)(source_width * scale + 0.5);
+	int target_height = (int)(source_height * scale + 0.5);
+	if (target_width < 1) target_width = 1;
+	if (target_height < 1) target_height = 1;
+
+	char input_path[] = "/tmp/deskpal_scale_in_XXXXXX.png";
+	char output_path[] = "/tmp/deskpal_scale_out_XXXXXX.png";
+	int input_fd = mkstemps(input_path, 4);
+	int output_fd = mkstemps(output_path, 4);
+	if (input_fd < 0 || output_fd < 0) {
+		if (input_fd >= 0) close(input_fd);
+		if (output_fd >= 0) close(output_fd);
+		unlink(input_path);
+		unlink(output_path);
+		return -1;
+	}
+	close(output_fd);
+
+	int write_result = write_all(input_fd, *png, *png_len);
+	int input_close = close(input_fd);
+	if (write_result != 0 || input_close != 0) {
+		unlink(input_path);
+		unlink(output_path);
+		return -1;
+	}
+
+	char geometry[64];
+	snprintf(geometry, sizeof(geometry), "%dx%d!", target_width, target_height);
+	pid_t child = fork();
+	if (child == 0) {
+		int null_fd = open("/dev/null", O_WRONLY);
+		if (null_fd >= 0) {
+			dup2(null_fd, STDERR_FILENO);
+			if (null_fd > STDERR_FILENO) close(null_fd);
+		}
+		execlp("convert", "convert", input_path, "-filter", "Lanczos",
+		       "-resize", geometry, output_path, (char *)NULL);
+		_exit(127);
+	}
+	int timeout_ms = 5000;
+	const char *test_timeout = getenv("DESKPAL_TEST_SCALE_TIMEOUT_MS");
+	if (test_timeout && test_timeout[0]) {
+		int parsed = atoi(test_timeout);
+		if (parsed >= 50 && parsed <= 5000) timeout_ms = parsed;
+	}
+	int status = 0;
+	int wait_result = child < 0
+		? -1 : wait_child_deadline(child, timeout_ms, &status);
+	if (wait_result != 0 ||
+	    !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		unlink(input_path);
+		unlink(output_path);
+		return -1;
+	}
+
+	uint8_t *resized = NULL;
+	size_t resized_len = 0;
+	int read_result = read_binary_file(output_path, &resized, &resized_len);
+	unlink(input_path);
+	unlink(output_path);
+	if (read_result != 0) return -1;
+
+	free(*png);
+	*png = resized;
+	*png_len = resized_len;
+	*image_width = target_width;
+	*image_height = target_height;
+	return 0;
+}
+
 /* ── screenshot ──────────────────────────────────────────────────────────── */
 
 cJSON *tool_screenshot(const cJSON *params)
 {
 	int full_screen = json_bool(params, "fullScreen", 0);
+	int max_width = json_int(params, "maxWidth", 0);
+	int max_height = json_int(params, "maxHeight", 0);
+	if (max_width < 0 || max_width > 8192 || max_height < 0 || max_height > 8192)
+		return mcp_tool_error_result("maxWidth/maxHeight must be between 0 and 8192");
 	unsigned long wid = resolve_window(params);
 	if (!full_screen && !wid && explicit_window_requested(params))
 		return mcp_text_result("Window not found");
@@ -189,6 +404,19 @@ cJSON *tool_screenshot(const cJSON *params)
 		return mcp_text_result("Screenshot failed: could not capture window");
 	}
 
+	int source_width = 0, source_height = 0;
+	int image_width = 0, image_height = 0;
+	if (png_dimensions(png, png_len, &source_width, &source_height) != 0) {
+		free(png);
+		return mcp_text_result("Screenshot failed: invalid PNG dimensions");
+	}
+	if (resize_png(&png, &png_len, source_width, source_height,
+	               max_width, max_height, &image_width, &image_height) != 0) {
+		free(png);
+		return mcp_text_result(
+			"Screenshot downscaling failed. Ensure ImageMagick 'convert' is installed");
+	}
+
 	char *b64 = screenshot_base64_encode(png, png_len);
 	free(png);
 
@@ -198,6 +426,32 @@ cJSON *tool_screenshot(const cJSON *params)
 
 	cJSON *result = mcp_image_result(b64, "image/png");
 	free(b64);
+
+	cJSON *metadata = cJSON_CreateObject();
+	cJSON_AddNumberToObject(metadata, "sourceWidth", source_width);
+	cJSON_AddNumberToObject(metadata, "sourceHeight", source_height);
+	cJSON_AddNumberToObject(metadata, "imageWidth", image_width);
+	cJSON_AddNumberToObject(metadata, "imageHeight", image_height);
+	cJSON_AddNumberToObject(metadata, "coordinateScaleX",
+	                       (double)source_width / image_width);
+	cJSON_AddNumberToObject(metadata, "coordinateScaleY",
+	                       (double)source_height / image_height);
+	cJSON_AddItemToObject(result, "screenshot", metadata);
+
+	if (image_width != source_width || image_height != source_height) {
+		char note[256];
+		snprintf(note, sizeof(note),
+			"Screenshot downscaled from %dx%d to %dx%d. Input-tool coordinates "
+			"use source pixels; multiply image x by %.4f and y by %.4f.",
+			source_width, source_height, image_width, image_height,
+			(double)source_width / image_width,
+			(double)source_height / image_height);
+		cJSON *content = cJSON_GetObjectItem(result, "content");
+		cJSON *text_item = cJSON_CreateObject();
+		cJSON_AddStringToObject(text_item, "type", "text");
+		cJSON_AddStringToObject(text_item, "text", note);
+		cJSON_AddItemToArray(content, text_item);
+	}
 	return result;
 }
 
@@ -206,28 +460,29 @@ cJSON *tool_screenshot(const cJSON *params)
 cJSON *tool_list_windows(const cJSON *params)
 {
 	const char *name_filter = json_str(params, "name", NULL);
+	int include_all = json_bool(params, "includeAll", 0);
 
 	WindowInfo windows[50];
-	int count = x11_list_windows(windows, 50, name_filter);
+	int count = x11_list_windows(windows, 50, name_filter, include_all);
 
 	int scale = x11_get_scale_factor();
 
 	char buf[8192];
-	int pos = 0;
+	size_t pos = 0;
 
-	for (int i = 0; i < count && pos < (int)sizeof(buf) - 256; i++) {
-		pos += snprintf(buf + pos, sizeof(buf) - pos,
-			"[%lu] \"%s\" pid=%ld\n"
+	for (int i = 0; i < count && pos < sizeof(buf) - 256; i++) {
+		append_text(buf, sizeof(buf), &pos,
+			"[%lu] \"%s\" class=\"%s\" pid=%ld\n"
 			"  Position: %d,%d (screen: 0)\n"
 			"  Geometry: %dx%d\n\n",
-			windows[i].id, windows[i].title, windows[i].pid,
+			windows[i].id, windows[i].title, windows[i].app_class,
+			windows[i].pid,
 			windows[i].x, windows[i].y,
 			windows[i].width, windows[i].height);
 	}
 
 	if (count > 0) {
-		pos += snprintf(buf + pos, sizeof(buf) - pos,
-			"Display scale: %dx", scale);
+		append_text(buf, sizeof(buf), &pos, "Display scale: %dx", scale);
 	} else {
 		snprintf(buf, sizeof(buf), "No visible windows found");
 	}
@@ -241,6 +496,8 @@ cJSON *tool_find_window(const cJSON *params)
 {
 	const char *name = json_str(params, "name", NULL);
 	if (!name) name = json_str(params, "windowName", "");
+	if (!name[0])
+		return mcp_tool_error_result("name must be a non-empty string");
 	unsigned long wid = x11_find_window(name);
 	if (!wid) {
 		char msg[256];
@@ -249,12 +506,17 @@ cJSON *tool_find_window(const cJSON *params)
 	}
 
 	WindowInfo info;
-	x11_get_window_info(wid, &info);
+	if (x11_get_window_info(wid, &info) != 0 || !info.viewable) {
+		char msg[256];
+		snprintf(msg, sizeof(msg), "No window found matching \"%s\"", name);
+		return mcp_text_result(msg);
+	}
 
 	char buf[512];
 	snprintf(buf, sizeof(buf),
-		"[%lu] \"%s\"\n  Position: %d,%d\n  Size: %dx%d\n  PID: %ld",
-		info.id, info.title, info.x, info.y, info.width, info.height, info.pid);
+		"[%lu] \"%s\" class=\"%s\"\n  Position: %d,%d\n  Size: %dx%d\n  PID: %ld",
+		info.id, info.title, info.app_class, info.x, info.y,
+		info.width, info.height, info.pid);
 	return mcp_text_result(buf);
 }
 
@@ -265,7 +527,8 @@ cJSON *tool_focus_window(const cJSON *params)
 	unsigned long wid = resolve_window(params);
 	if (!wid) return mcp_text_result("Window not found");
 
-	x11_focus_window(wid);
+	if (x11_focus_window(wid) != 0)
+		return mcp_text_result("Window not found");
 
 	char buf[64];
 	snprintf(buf, sizeof(buf), "Focused window %lu", wid);
@@ -301,12 +564,21 @@ cJSON *tool_click(const cJSON *params)
 		 * origin (observed ~90 screen-px offset on mutter+HiDPI).
 		 * Route the whole motion+press through xdotool --window,
 		 * which uses the X server's coordinate system. */
-		x11_window_click(target, x, y, button, dbl ? 2 : 1);
+		if (x11_window_mouse_move(target, x, y) != 0) {
+			return mcp_text_result("Mouse move failed");
+		}
+		usleep_ms(10);
+		if (!window_is_viewable(target))
+			return mcp_text_result("Window not found");
+		if (x11_click(button, dbl ? 2 : 1) != 0)
+			return mcp_text_result("Click failed");
 	} else {
 		/* Move cursor to click position — with uinput this also
 		 * gives the window compositor-level focus automatically. */
 		x11_mouse_move(abs_x, abs_y);
 		usleep_ms(10);
+		if (!window_is_viewable(target))
+			return mcp_text_result("Window not found");
 
 		if (button != 1 && uinput_available()) {
 			/* uinput ABS right-click doesn't trigger GTK context
@@ -318,12 +590,15 @@ cJSON *tool_click(const cJSON *params)
 			if (dbl) {
 				char cmd2[280];
 				snprintf(cmd2, sizeof(cmd2), "%s && %s", cmd, cmd);
-				system(cmd2);
+					if (system(cmd2) != 0)
+						return mcp_text_result("Click failed");
 			} else {
-				system(cmd);
+					if (system(cmd) != 0)
+						return mcp_text_result("Click failed");
 			}
 		} else {
-			x11_click(button, dbl ? 2 : 1);
+				if (x11_click(button, dbl ? 2 : 1) != 0)
+					return mcp_text_result("Click failed");
 		}
 	}
 
@@ -583,17 +858,37 @@ cJSON *tool_click_text(const cJSON *params)
 
 		int click_x = match.x + match.width / 2 + off_x;
 		int click_y = match.y + match.height / 2 + off_y;
+		if (revalidate_target(params, target, &info) != 0) {
+			ocr_result_free(&ocr_result);
+			return mcp_text_result("Window not found");
+		}
 		int abs_x = info.x + click_x;
 		int abs_y = info.y + click_y;
-		if (getenv("DESKPAL_HEADLESS_ACTIVE"))
-			x11_focus_window(target);
+		if (getenv("DESKPAL_HEADLESS_ACTIVE") &&
+		    x11_focus_window(target) != 0) {
+			ocr_result_free(&ocr_result);
+			return mcp_text_result("Window not found");
+		}
 
 		if (x11_is_wayland()) {
-			x11_window_click(target, click_x, click_y, button, 1);
+			if (x11_window_mouse_move(target, click_x, click_y) != 0) {
+				ocr_result_free(&ocr_result);
+				return mcp_text_result("Mouse move failed");
+			}
 		} else {
-			x11_mouse_move(abs_x, abs_y);
-			usleep_ms(10);
-			x11_click(button, 1);
+			if (x11_mouse_move(abs_x, abs_y) != 0) {
+				ocr_result_free(&ocr_result);
+				return mcp_text_result("Mouse move failed");
+			}
+		}
+		usleep_ms(10);
+		if (revalidate_target(params, target, &info) != 0) {
+			ocr_result_free(&ocr_result);
+			return mcp_text_result("Window not found");
+		}
+		if (x11_click(button, 1) != 0) {
+			ocr_result_free(&ocr_result);
+			return mcp_text_result("Click failed");
 		}
 
 		char buf[256];
@@ -763,9 +1058,23 @@ cJSON *tool_click_text(const cJSON *params)
 		int abs_x = crop_x + match.x + match.width / 2 + off_x;
 		int abs_y = crop_y + match.y + match.height / 2 + off_y;
 
-		x11_mouse_move(abs_x, abs_y);
+		if (revalidate_target(params, target, &info) != 0) {
+			ocr_result_free(&screen_ocr);
+			return mcp_text_result("Window not found");
+		}
+		if (x11_mouse_move(abs_x, abs_y) != 0) {
+			ocr_result_free(&screen_ocr);
+			return mcp_text_result("Mouse move failed");
+		}
 		usleep_ms(10);
-		x11_click(button, 1);
+		if (revalidate_target(params, target, &info) != 0) {
+			ocr_result_free(&screen_ocr);
+			return mcp_text_result("Window not found");
+		}
+		if (x11_click(button, 1) != 0) {
+			ocr_result_free(&screen_ocr);
+			return mcp_text_result("Click failed");
+		}
 
 		char buf[256];
 		snprintf(buf, sizeof(buf),
@@ -1085,7 +1394,11 @@ cJSON *tool_launch_app(const cJSON *params)
 	int headless = getenv("DESKPAL_HEADLESS_ACTIVE") != NULL;
 	int kill_existing = json_bool(params, "killExisting", headless ? 0 : 1);
 	int timeout = json_int(params, "timeout", 10);
-	const char *wait_title = json_str(params, "waitForWindow", NULL);
+	const cJSON *wait_item = cJSON_GetObjectItem(params, "waitForWindow");
+	if (wait_item && (!cJSON_IsString(wait_item) || !wait_item->valuestring[0]))
+		return mcp_tool_error_result(
+			"waitForWindow must be a non-empty string when provided");
+	const char *wait_title = wait_item ? wait_item->valuestring : NULL;
 
 	/* Extract basename */
 	const char *basename = strrchr(command, '/');
@@ -1111,15 +1424,17 @@ cJSON *tool_launch_app(const cJSON *params)
 	while (elapsed < deadline_ms) {
 		usleep_ms(500);
 		elapsed += 500;
-		unsigned long wid = x11_find_window(search_title);
+		unsigned long wid = wait_title
+			? x11_find_window(search_title) : x11_find_app(search_title);
 		if (wid) {
 			WindowInfo info;
-			x11_get_window_info(wid, &info);
+			if (x11_get_window_info(wid, &info) != 0 || !info.viewable)
+				continue;
 			char buf[512];
 			snprintf(buf, sizeof(buf),
-				"Launched \"%s\"\n[%lu] \"%s\"\n  Position: %d,%d\n  "
+				"Launched \"%s\"\n[%lu] \"%s\" class=\"%s\"\n  Position: %d,%d\n  "
 				"Size: %dx%d\n  PID: %ld",
-				command, info.id, info.title,
+				command, info.id, info.title, info.app_class,
 				info.x, info.y, info.width, info.height, info.pid);
 			return mcp_text_result(buf);
 		}
@@ -1143,11 +1458,15 @@ cJSON *tool_type_text(const cJSON *params)
 	if (!wid && explicit_window_requested(params))
 		return mcp_text_result("Window not found");
 	if (wid) {
-		x11_focus_window(wid);
+		if (x11_focus_window(wid) != 0)
+			return mcp_text_result("Window not found");
 		usleep_ms(50);
+		if (!window_is_viewable(wid))
+			return mcp_text_result("Window not found");
 	}
 
-	x11_type_text(text, delay);
+	if (x11_type_text(text, delay) != 0)
+		return mcp_text_result("Typing failed");
 
 	char buf[64];
 	snprintf(buf, sizeof(buf), "Typed %d characters", (int)strlen(text));
@@ -1164,11 +1483,15 @@ cJSON *tool_key_press(const cJSON *params)
 	if (!wid && explicit_window_requested(params))
 		return mcp_text_result("Window not found");
 	if (wid) {
-		x11_focus_window(wid);
+		if (x11_focus_window(wid) != 0)
+			return mcp_text_result("Window not found");
 		usleep_ms(50);
+		if (!window_is_viewable(wid))
+			return mcp_text_result("Window not found");
 	}
 
-	x11_key_press(keys);
+	if (x11_key_press(keys) != 0)
+		return mcp_text_result("Key press failed");
 
 	char buf[128];
 	snprintf(buf, sizeof(buf), "Pressed: %s", keys);
@@ -1193,12 +1516,12 @@ cJSON *tool_get_window_geometry(const cJSON *params)
 
 	char buf[512];
 	snprintf(buf, sizeof(buf),
-		"Window: [%lu] \"%s\"\n"
+		"Window: [%lu] \"%s\" class=\"%s\"\n"
 		"Position: %d,%d\n"
 		"Size: %dx%d\n"
 		"Scale: %dx\n"
 		"PID: %ld",
-		info.id, info.title, info.x, info.y,
+		info.id, info.title, info.app_class, info.x, info.y,
 		info.width, info.height, scale, info.pid);
 	return mcp_text_result(buf);
 }
@@ -1215,7 +1538,8 @@ cJSON *tool_resize_window(const cJSON *params)
 	int width = json_int(params, "width", 800);
 	int height = json_int(params, "height", 600);
 
-	x11_resize_window(wid, width, height);
+	if (x11_resize_window(wid, width, height) != 0)
+		return mcp_text_result("Window resize failed");
 
 	char buf[64];
 	snprintf(buf, sizeof(buf), "Resized window %lu to %dx%d", wid, width, height);
@@ -1226,7 +1550,10 @@ cJSON *tool_resize_window(const cJSON *params)
 
 cJSON *tool_wait_for_window(const cJSON *params)
 {
-	const char *name = json_str(params, "name", "");
+	const cJSON *name_item = cJSON_GetObjectItem(params, "name");
+	if (!name_item || !cJSON_IsString(name_item) || !name_item->valuestring[0])
+		return mcp_tool_error_result("name must be a non-empty string");
+	const char *name = name_item->valuestring;
 	int timeout = json_int(params, "timeout", 10);
 
 	int deadline_ms = timeout * 1000;
@@ -1236,7 +1563,11 @@ cJSON *tool_wait_for_window(const cJSON *params)
 		unsigned long wid = x11_find_window(name);
 		if (wid) {
 			WindowInfo info;
-			x11_get_window_info(wid, &info);
+			if (x11_get_window_info(wid, &info) != 0 || !info.viewable) {
+				usleep_ms(500);
+				elapsed += 500;
+				continue;
+			}
 			char buf[512];
 			snprintf(buf, sizeof(buf),
 				"Window appeared: [%lu] \"%s\" (%dx%d)",
@@ -1283,6 +1614,7 @@ cJSON *tool_mouse_move(const cJSON *params)
 				x, y, abs_x, abs_y);
 			return mcp_text_result(buf);
 		}
+		return mcp_text_result("Window not found");
 	}
 
 	x11_mouse_move(x, y);
@@ -1302,12 +1634,14 @@ cJSON *tool_scroll(const cJSON *params)
 	if (!wid && explicit_window_requested(params))
 		return mcp_text_result("Window not found");
 	if (wid) {
-		x11_focus_window(wid);
+		if (x11_focus_window(wid) != 0)
+			return mcp_text_result("Window not found");
 		usleep_ms(50);
 	}
 
 	int button = (strcmp(dir, "up") == 0) ? 4 : 5;
-	x11_scroll(button, clicks);
+	if (x11_scroll(button, clicks) != 0)
+		return mcp_text_result("Scroll failed");
 
 	char buf[64];
 	snprintf(buf, sizeof(buf), "Scrolled %s %d clicks", dir, clicks);
@@ -1329,7 +1663,8 @@ cJSON *tool_drag(const cJSON *params)
 	if (!wid && explicit_window_requested(params))
 		return mcp_text_result("Window not found");
 	if (wid) {
-		x11_focus_window(wid);
+		if (x11_focus_window(wid) != 0)
+			return mcp_text_result("Window not found");
 		usleep_ms(100);
 	}
 
@@ -1344,7 +1679,8 @@ cJSON *tool_drag(const cJSON *params)
 	int abs_to_x = info.x + to_x;
 	int abs_to_y = info.y + to_y;
 
-	x11_drag(abs_from_x, abs_from_y, abs_to_x, abs_to_y, button, steps);
+	if (x11_drag(abs_from_x, abs_from_y, abs_to_x, abs_to_y, button, steps) != 0)
+		return mcp_text_result("Drag failed");
 
 	char buf[192];
 	snprintf(buf, sizeof(buf),
@@ -1372,13 +1708,18 @@ cJSON *tool_mouse_down(const cJSON *params)
 		if (x11_get_window_info(wid, &info) == 0) {
 			x11_mouse_move(info.x + x, info.y + y);
 			usleep_ms(10);
+			if (!window_is_viewable(wid))
+				return mcp_text_result("Window not found");
+		} else {
+			return mcp_text_result("Window not found");
 		}
 	} else if (x >= 0 && y >= 0) {
 		x11_mouse_move(x, y);
 		usleep_ms(10);
 	}
 
-	x11_mouse_down(button);
+	if (x11_mouse_down(button) != 0)
+		return mcp_text_result("Mouse down failed");
 
 	char buf[64];
 	snprintf(buf, sizeof(buf), "Mouse button %d pressed", button);
@@ -1388,7 +1729,8 @@ cJSON *tool_mouse_down(const cJSON *params)
 cJSON *tool_mouse_up(const cJSON *params)
 {
 	int button = json_button(params, "button", 1);
-	x11_mouse_up(button);
+	if (x11_mouse_up(button) != 0)
+		return mcp_text_result("Mouse up failed");
 
 	char buf[64];
 	snprintf(buf, sizeof(buf), "Mouse button %d released", button);
@@ -1602,24 +1944,34 @@ cJSON *tool_hover_text(const cJSON *params)
 
 	int rel_x = hit.x + hit.width / 2;
 	int rel_y = hit.y + hit.height / 2;
+	ocr_result_free(&target_ocr);
+	if (revalidate_target(params, target, &info) != 0)
+		return mcp_text_result("Window not found");
 	int hover_x = info.x + rel_x;
 	int hover_y = info.y + rel_y;
-	ocr_result_free(&target_ocr);
 
 	/* Make sure the target is actually exposed before moving the real cursor;
 	 * direct window capture can see an obscured window, but the pointer cannot. */
-	x11_focus_window(target);
+	if (x11_focus_window(target) != 0)
+		return mcp_text_result("Window not found");
 	usleep_ms(100);
+	if (revalidate_target(params, target, &info) != 0)
+		return mcp_text_result("Window not found");
 
 	/* Tooltip windows live outside the target window. Capture the whole screen
 	 * both before and after hovering so the diff uses one coordinate space and
 	 * unchanged desktop text is not mistaken for tooltip content. */
 	OcrResult before = { 0 };
 	ocr_screenshot(0, &before);
+	int move_result;
 	if (x11_is_wayland()) {
-		x11_window_mouse_move(target, rel_x, rel_y);
+		move_result = x11_window_mouse_move(target, rel_x, rel_y);
 	} else {
-		x11_mouse_move(hover_x, hover_y);
+		move_result = x11_mouse_move(hover_x, hover_y);
+	}
+	if (move_result != 0 || revalidate_target(params, target, &info) != 0) {
+		ocr_result_free(&before);
+		return mcp_text_result("Window not found");
 	}
 	usleep_ms(settle_ms);
 
@@ -1913,23 +2265,26 @@ void tools_register_all(void)
 		tool_close_isolated_session);
 
 	mcp_register_tool("screenshot",
-		"Capture a screenshot of a window or screen. Omit sessionId for the user's desktop; use the sessionId from launch_isolated_app for private app verification. Returns base64 PNG.",
+		"Capture a screenshot of a window or screen. Omit sessionId for the user's desktop; use the sessionId from launch_isolated_app for private app verification. Optional maxWidth/maxHeight downscale the image while preserving source-coordinate metadata.",
 		"{"
 		"  \"type\": \"object\","
 		"  \"properties\": {"
 		"    \"windowId\": {\"type\": \"string\", \"description\": \"X11 window ID\"},"
 		"    \"windowName\": {\"type\": \"string\", \"description\": \"Window title substring\"},"
-		"    \"fullScreen\": {\"type\": \"boolean\", \"description\": \"Capture entire screen\", \"default\": false}"
+		"    \"fullScreen\": {\"type\": \"boolean\", \"description\": \"Capture entire screen\", \"default\": false},"
+		"    \"maxWidth\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 8192, \"default\": 0, \"description\": \"Optional maximum output width; 0 keeps source size\"},"
+		"    \"maxHeight\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 8192, \"default\": 0, \"description\": \"Optional maximum output height; 0 keeps source size\"}"
 		"  }"
 		"}",
 		tool_screenshot);
 
 	mcp_register_tool("list_windows",
-		"List windows on the user's desktop by default, or in an isolated verification session when sessionId is supplied.",
+		"List top-level application windows on the user's desktop by default, or in an isolated verification session when sessionId is supplied. Set includeAll for recursive helper/dialog discovery.",
 		"{"
 		"  \"type\": \"object\","
 		"  \"properties\": {"
-		"    \"name\": {\"type\": \"string\", \"description\": \"Optional title filter\"}"
+		"    \"name\": {\"type\": \"string\", \"description\": \"Optional title or app-class filter\"},"
+		"    \"includeAll\": {\"type\": \"boolean\", \"default\": false, \"description\": \"Include recursive helper/dialog windows\"}"
 		"  }"
 		"}",
 		tool_list_windows);

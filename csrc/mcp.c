@@ -11,6 +11,9 @@
  */
 #include "mcp.h"
 #include "sessions.h"
+#include "control.h"
+#include "tools.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -185,6 +188,122 @@ static cJSON *handle_tools_list(void)
 	return result;
 }
 
+static int integer_in_range(const cJSON *arguments, const char *key,
+	                        long long minimum, long long maximum)
+{
+	const cJSON *item = arguments ? cJSON_GetObjectItem(arguments, key) : NULL;
+	if (!item) return 1;
+	if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble) ||
+	    floor(item->valuedouble) != item->valuedouble ||
+	    item->valuedouble < (double)minimum ||
+	    item->valuedouble > (double)maximum)
+		return 0;
+	return 1;
+}
+
+static int valid_button(const cJSON *arguments)
+{
+	const cJSON *button = arguments
+		? cJSON_GetObjectItem(arguments, "button") : NULL;
+	if (!button) return 1;
+	if (cJSON_IsString(button))
+		return strcmp(button->valuestring, "left") == 0 ||
+		       strcmp(button->valuestring, "middle") == 0 ||
+		       strcmp(button->valuestring, "right") == 0;
+	return integer_in_range(arguments, "button", 1, 3);
+}
+
+static cJSON *validate_tool_arguments(const char *tool_name,
+	                                  const cJSON *arguments)
+{
+	if (arguments && !cJSON_IsObject(arguments))
+		return mcp_tool_error_result("arguments must be an object");
+
+	if (strcmp(tool_name, "click") == 0 ||
+	    strcmp(tool_name, "mouse_move") == 0 ||
+	    strcmp(tool_name, "mouse_down") == 0) {
+		if (!integer_in_range(arguments, "x", -32768, 32768) ||
+		    !integer_in_range(arguments, "y", -32768, 32768))
+			return mcp_tool_error_result("x/y must be integral pixels between -32768 and 32768");
+	}
+	if ((strcmp(tool_name, "click") == 0 ||
+	     strcmp(tool_name, "click_text") == 0 ||
+	     strcmp(tool_name, "mouse_down") == 0 ||
+	     strcmp(tool_name, "mouse_up") == 0 ||
+	    strcmp(tool_name, "drag") == 0) && !valid_button(arguments))
+		return mcp_tool_error_result(
+			"button must be left/middle/right or an integer between 1 and 3");
+	if (strcmp(tool_name, "drag") == 0) {
+		for (int i = 0; i < 4; i++) {
+			const char *keys[] = { "fromX", "fromY", "toX", "toY" };
+			if (!integer_in_range(arguments, keys[i], -32768, 32768))
+				return mcp_tool_error_result("drag coordinates must be integral pixels between -32768 and 32768");
+		}
+		if (!integer_in_range(arguments, "steps", 1, 500))
+			return mcp_tool_error_result("steps must be an integer between 1 and 500");
+	}
+	if (strcmp(tool_name, "scroll") == 0 &&
+	    !integer_in_range(arguments, "clicks", 1, 100))
+		return mcp_tool_error_result("clicks must be an integer between 1 and 100");
+	if (strcmp(tool_name, "resize_window") == 0 &&
+	    (!integer_in_range(arguments, "width", 1, 16384) ||
+	     !integer_in_range(arguments, "height", 1, 16384)))
+		return mcp_tool_error_result("width/height must be integers between 1 and 16384");
+	if ((strcmp(tool_name, "launch_app") == 0 ||
+	     strcmp(tool_name, "launch_isolated_app") == 0 ||
+	     strcmp(tool_name, "wait_for_window") == 0) &&
+	    !integer_in_range(arguments, "timeout", 1, 120))
+		return mcp_tool_error_result("timeout must be an integer between 1 and 120 seconds");
+	if (strcmp(tool_name, "exec") == 0 &&
+	    !integer_in_range(arguments, "timeoutMs", 1, 60000))
+		return mcp_tool_error_result("timeoutMs must be an integer between 1 and 60000");
+	if (strcmp(tool_name, "hover_text") == 0 &&
+	    !integer_in_range(arguments, "settleMs", 0, 10000))
+		return mcp_tool_error_result("settleMs must be an integer between 0 and 10000");
+	if (strcmp(tool_name, "click_text") == 0) {
+		if (!integer_in_range(arguments, "occurrence", 1, 1000))
+			return mcp_tool_error_result("occurrence must be an integer between 1 and 1000");
+		const cJSON *offset = arguments
+			? cJSON_GetObjectItem(arguments, "offset") : NULL;
+		if (offset && (!cJSON_IsObject(offset) ||
+		    !integer_in_range(offset, "x", -4096, 4096) ||
+		    !integer_in_range(offset, "y", -4096, 4096)))
+			return mcp_tool_error_result("offset x/y must be integral pixels between -4096 and 4096");
+	}
+	if (strcmp(tool_name, "screenshot") == 0 &&
+	    (!integer_in_range(arguments, "maxWidth", 0, 8192) ||
+	     !integer_in_range(arguments, "maxHeight", 0, 8192)))
+		return mcp_tool_error_result("maxWidth/maxHeight must be integers between 0 and 8192");
+	if (strcmp(tool_name, "read_screen_text") == 0) {
+		const cJSON *region = arguments
+			? cJSON_GetObjectItem(arguments, "region") : NULL;
+		if (region && (!cJSON_IsObject(region) ||
+		    !integer_in_range(region, "x", 0, 32768) ||
+		    !integer_in_range(region, "y", 0, 32768) ||
+		    !integer_in_range(region, "width", 1, 16384) ||
+		    !integer_in_range(region, "height", 1, 16384)))
+			return mcp_tool_error_result(
+				"region x/y must be non-negative integral pixels and width/height between 1 and 16384");
+	}
+	if (strcmp(tool_name, "read_file") == 0 &&
+	    !integer_in_range(arguments, "maxBytes", 1, 16 * 1024 * 1024))
+		return mcp_tool_error_result("maxBytes must be an integer between 1 and 16777216");
+	if (strcmp(tool_name, "type_text") == 0) {
+		if (!integer_in_range(arguments, "delay", 0, 1000))
+			return mcp_tool_error_result("delay must be an integer between 0 and 1000 ms");
+		const cJSON *text = arguments ? cJSON_GetObjectItem(arguments, "text") : NULL;
+		long long delay = 12;
+		const cJSON *delay_item = arguments
+			? cJSON_GetObjectItem(arguments, "delay") : NULL;
+		if (delay_item) delay = (long long)delay_item->valuedouble;
+		if (text && cJSON_IsString(text) &&
+		    (strlen(text->valuestring) > 65536 ||
+		     (long long)strlen(text->valuestring) * delay > 60000))
+			return mcp_tool_error_result("typed text is limited to 65536 characters and 60 seconds");
+	}
+	return NULL;
+}
+
 static cJSON *handle_tools_call(const cJSON *params)
 {
 	const cJSON *name_item = cJSON_GetObjectItem(params, "name");
@@ -198,19 +317,59 @@ static cJSON *handle_tools_call(const cJSON *params)
 	}
 
 	const cJSON *arguments = cJSON_GetObjectItem(params, "arguments");
+	const char *tool_name = name_item->valuestring;
+	cJSON *argument_error = validate_tool_arguments(tool_name, arguments);
+	if (argument_error) return argument_error;
+	if ((strcmp(tool_name, "exec") == 0 ||
+	     strcmp(tool_name, "launch_app") == 0 ||
+	     strcmp(tool_name, "launch_isolated_app") == 0) &&
+	    !deskpal_allow_exec) {
+		return mcp_tool_error_result(
+			"Command execution is disabled. Start deskpal with --allow-exec to enable exec and app launch tools.");
+	}
+
+	const cJSON *window_id = arguments
+		? cJSON_GetObjectItem(arguments, "windowId") : NULL;
+	const cJSON *window_name = arguments
+		? cJSON_GetObjectItem(arguments, "windowName") : NULL;
+	if (window_id && window_name) {
+		return mcp_tool_error_result(
+			"Specify only one of windowId or windowName");
+	}
+	if ((window_id && (!cJSON_IsString(window_id) || !window_id->valuestring[0])) ||
+	    (window_name && (!cJSON_IsString(window_name) || !window_name->valuestring[0]))) {
+		return mcp_tool_error_result(
+			"windowId/windowName must be a non-empty string when provided");
+	}
+	const cJSON *full_screen = arguments
+		? cJSON_GetObjectItem(arguments, "fullScreen") : NULL;
+	if (full_screen && cJSON_IsTrue(full_screen) && (window_id || window_name)) {
+		return mcp_tool_error_result(
+			"fullScreen cannot be combined with windowId or windowName");
+	}
 	const cJSON *session_id = arguments
 		? cJSON_GetObjectItem(arguments, "sessionId") : NULL;
 	int session_routable =
-		strcmp(name_item->valuestring, "launch_isolated_app") != 0 &&
-		strcmp(name_item->valuestring, "close_isolated_session") != 0;
+		strcmp(tool_name, "launch_isolated_app") != 0 &&
+		strcmp(tool_name, "close_isolated_session") != 0;
 	if (session_id && session_routable &&
 	    (!cJSON_IsString(session_id) || !session_id->valuestring[0])) {
 		return mcp_tool_error_result(
 			"sessionId must be a non-empty string. Omit it only when the tool should target the user's desktop.");
 	}
 	if (session_id && session_routable) {
-		return sessions_forward_tool(session_id->valuestring,
-			name_item->valuestring, arguments);
+		if (strcmp(tool_name, "exec") == 0 ||
+		    strcmp(tool_name, "launch_app") == 0) {
+			char error[320];
+			if (control_acquire(error, sizeof(error)) != 0)
+				return mcp_tool_error_result(error);
+		}
+		return sessions_forward_tool(session_id->valuestring, tool_name, arguments);
+	}
+	if (control_tool_requires_lock(tool_name)) {
+		char error[320];
+		if (control_acquire(error, sizeof(error)) != 0)
+			return mcp_tool_error_result(error);
 	}
 	return tool->handler(arguments ? arguments : cJSON_CreateObject());
 }
