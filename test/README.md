@@ -59,6 +59,29 @@ Capability-dependent cases print `BLOCK` when the visible surface is native
 Wayland and therefore outside the current backend; blocked is not counted as
 passed.
 
+## Claude Desktop/Cowork host acceptance
+
+This is a manual host-integration check, not part of `npm test`. Run Claude
+Desktop with its X11 backend, create a fresh Cowork task, and ask it to use only
+deskpal MCP tools to perform the deterministic fixture workflow from
+`e2e_computer_use.py` inside `launch_isolated_app`.
+
+Require the task to report and verify:
+
+- scoped window discovery and a 720x520 to 360x260 screenshot
+- initial and post-edit OCR, including exact status text
+- hover tooltip, 640x440 resize, and 720x520 restoration
+- three downward scroll clicks and an exact clipboard round trip
+- fixture disappearance followed by `close_isolated_session`
+
+Desktop prompts on the first use of each MCP tool type. "Allow for this task"
+applies to later calls of that type, not every tool exposed by the server;
+validate the displayed tool and `sessionId` before approving it. If the Cowork
+task is stopped before its cleanup step, explicitly close the isolated session
+or stop the deskpal MCP host, then confirm no fixture or Xvfb process remains.
+The live baseline and known host gaps are recorded in
+`docs/computer-use-parity.md`.
+
 ## Adding coverage
 
 1. Prefer a deterministic Tk fixture under `test/fixtures/`.

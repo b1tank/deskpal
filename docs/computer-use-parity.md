@@ -157,3 +157,47 @@ capability as unverified.
   for the focused `Refresh` row. Which popup row is visible to X11 capture can
   vary by compositor frame; deterministic OCR interaction remains covered by
   the nested Tk suite.
+
+## Claude Desktop Cowork acceptance (2026-07-18)
+
+A fresh Claude Desktop Cowork task exercised deskpal through the actual MCP
+bridge, rather than calling the server directly. The environment was Claude
+Desktop 1.22209.0 with embedded Claude Code 2.1.209 on Ubuntu GNOME Wayland.
+Claude Desktop was launched with its X11 backend because native-Wayland windows
+are outside deskpal's current discovery and capture backend.
+
+The task used `launch_isolated_app`, passed `sessionId="xvfb-1"` to every
+subsequent tool, and reported 10/10 PASS:
+
+| Scenario | Observed result |
+|---|---|
+| Isolated launch and scoped discovery | Fixture found at 720x520 |
+| Bounded screenshot | Source 720x520, image 360x260, scale 2.0x/2.0x |
+| Initial OCR | Exact `Status: ready` match |
+| Click, key chord, typing, and click-by-text | Exact `claude desktop deskpal ok` status |
+| Tooltip OCR | `Deskpal tooltip` appeared after the scoped hover |
+| Geometry and resize | 640x440 and restored 720x520 both verified |
+| Scroll | Three downward clicks completed |
+| Clipboard | Exact `claude-desktop-clipboard` round trip |
+| Fixture close | Scoped window list confirmed the window was gone |
+| Session close | Fixture and Xvfb processes both exited |
+
+The run also confirmed two host-boundary gaps:
+
+- Claude Desktop's Cowork permission bridge remained authoritative for local
+  MCP calls. A user-level Claude Code rule for `mcp__deskpal__*` did not
+  suppress Desktop prompts. "Allow for this task" approved subsequent calls
+  of the same tool type, but did not blanket-approve other tools from the
+  deskpal server; each newly used tool type still prompted. Classic
+  `mcpServers` configuration has no supported per-server `toolPolicy`, so this
+  cannot be changed in deskpal's MCP config.
+- Stopping a permission-blocked Cowork task did not call
+  `close_isolated_session` and did not terminate the shared deskpal MCP host.
+  The fixture and Xvfb process group therefore remained alive until explicitly
+  cleaned up. Explicit session close and MCP-process exit still clean up
+  correctly. A robust automatic fix needs task cancellation/ownership from the
+  host or a carefully designed session lease; eagerly closing all sessions on
+  any interrupted request could break another client using the shared server.
+
+For current integrations, request explicit session close in a cleanup step and
+verify that no fixture/Xvfb process remains after an interrupted host task.
