@@ -81,6 +81,18 @@ def png_size(result):
     return struct.unpack(">II", data[16:24])
 
 
+def png_is_opaque(result):
+    data = base64.b64decode(result["content"][0]["data"])
+    identified = subprocess.run(
+        ["identify", "-format", "%[opaque]", "png:-"],
+        input=data,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    return identified.stdout.strip().lower() == b"true"
+
+
 def tool_by_name(tools, name):
     return next(tool for tool in tools if tool["name"] == name)
 
@@ -158,7 +170,7 @@ def wait_for_process_group_exit(process_group, timeout=3.0):
 def main():
     missing = [
         name
-        for name in ("Xvfb", "xvfb-run", "xauth", "xmessage")
+        for name in ("Xvfb", "xvfb-run", "xauth", "xmessage", "identify")
         if not shutil.which(name)
     ]
     if missing:
@@ -274,7 +286,13 @@ def main():
                 "launch_isolated_app",
                 {
                     "command": "xmessage",
-                    "args": ["-title", SECOND_WINDOW_TITLE, "second session"],
+                    "args": [
+                        "-geometry", "420x220",
+                        "-fn", "12x24",
+                        "-buttons", "Close Window:0",
+                        "-title", SECOND_WINDOW_TITLE,
+                        "second session",
+                    ],
                     "waitForWindow": SECOND_WINDOW_TITLE,
                     "timeout": 3,
                     "screenSize": "800x600",
@@ -296,6 +314,33 @@ def main():
                 "find_window", {"name": WINDOW_TITLE, **session_args}
             )
             assert WINDOW_TITLE in text(isolated_lookup), text(isolated_lookup)
+
+            for tool_name, arguments in (
+                ("screenshot", {}),
+                ("read_screen_text", {}),
+                ("click", {"x": 1, "y": 1}),
+                ("type_text", {"text": "must-not-type"}),
+                ("key_press", {"keys": "Return"}),
+                ("get_window_geometry", {}),
+                ("resize_window", {"width": 320, "height": 200}),
+                ("mouse_move", {"x": 1, "y": 1}),
+                ("scroll", {"direction": "down"}),
+                ("drag", {"fromX": 1, "fromY": 1, "toX": 2, "toY": 2}),
+                ("mouse_down", {"x": 1, "y": 1}),
+                ("hover_text", {"text": "missing"}),
+            ):
+                missing_target = client.tool(
+                    tool_name,
+                    {
+                        "windowName": "deskpal-window-that-does-not-exist",
+                        **arguments,
+                        **session_args,
+                    },
+                )
+                assert "Window not found" in text(missing_target), (
+                    tool_name,
+                    missing_target,
+                )
 
             companion = client.tool(
                 "launch_app",
@@ -351,6 +396,23 @@ def main():
                 "screenshot", {"windowName": WINDOW_TITLE, **session_args}
             )
             assert png_size(window_image)[0] > 0
+            assert png_is_opaque(window_image), "isolated screenshot is transparent"
+
+            window_text = client.tool(
+                "read_screen_text", {"windowName": WINDOW_TITLE, **session_args}
+            )
+            assert "verification" in text(window_text).lower(), text(window_text)
+
+            no_tooltip = client.tool(
+                "hover_text",
+                {
+                    "windowName": WINDOW_TITLE,
+                    "text": "verification",
+                    "settleMs": 200,
+                    **session_args,
+                },
+            )
+            assert "no tooltip detected" in text(no_tooltip), text(no_tooltip)
 
             root_image = client.tool(
                 "screenshot", {"fullScreen": True, **session_args}
@@ -397,6 +459,22 @@ def main():
                 {"name": SECOND_WINDOW_TITLE, "sessionId": second_session_id},
             )
             assert SECOND_WINDOW_TITLE in text(second_state), text(second_state)
+
+            second_clicked = client.tool(
+                "click_text",
+                {
+                    "windowName": SECOND_WINDOW_TITLE,
+                    "text": "Close Window",
+                    "sessionId": second_session_id,
+                },
+            )
+            assert "Clicked" in text(second_clicked), text(second_clicked)
+            time.sleep(0.5)
+            second_state = client.tool(
+                "find_window",
+                {"name": SECOND_WINDOW_TITLE, "sessionId": second_session_id},
+            )
+            assert "No window found" in text(second_state), text(second_state)
 
             stale = client.tool(
                 "find_window", {"name": WINDOW_TITLE, **session_args}

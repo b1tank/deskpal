@@ -53,6 +53,7 @@ static uint8_t *xcb_capture(unsigned long wid, int *out_w, int *out_h)
 
 	int w = geo->width;
 	int h = geo->height;
+	int depth = geo->depth;
 	free(geo);
 
 	if (w <= 0 || h <= 0) return NULL;
@@ -69,6 +70,12 @@ static uint8_t *xcb_capture(unsigned long wid, int *out_w, int *out_h)
 	uint8_t *pixels = malloc(len);
 	if (pixels) {
 		memcpy(pixels, data, len);
+		/* Depth-24 ZPixmap stores one unused padding byte per pixel. Xvfb
+		 * commonly sets it to zero, which must not become transparent PNG
+		 * alpha. Preserve the fourth byte for true depth-32 ARGB windows. */
+		if (depth == 24) {
+			for (int i = 3; i < len; i += 4) pixels[i] = 255;
+		}
 	}
 
 	*out_w = w;
@@ -155,7 +162,7 @@ uint8_t *screenshot_encode_png(const uint8_t *pixels, int width, int height,
 			row[x * 4 + 0] = src[x * 4 + 2]; /* R <- B */
 			row[x * 4 + 1] = src[x * 4 + 1]; /* G */
 			row[x * 4 + 2] = src[x * 4 + 0]; /* B <- R */
-			row[x * 4 + 3] = src[x * 4 + 3]; /* A */
+			row[x * 4 + 3] = src[x * 4 + 3]; /* A or normalized padding */
 		}
 		png_write_row(png, row);
 	}

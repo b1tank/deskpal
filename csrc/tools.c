@@ -83,6 +83,14 @@ static unsigned long resolve_window(const cJSON *params)
 	return 0;
 }
 
+static int explicit_window_requested(const cJSON *params)
+{
+	const cJSON *wid = params ? cJSON_GetObjectItem(params, "windowId") : NULL;
+	const cJSON *name = params ? cJSON_GetObjectItem(params, "windowName") : NULL;
+	return (wid && cJSON_IsString(wid) && wid->valuestring[0]) ||
+	       (name && cJSON_IsString(name) && name->valuestring[0]);
+}
+
 static void usleep_ms(int ms)
 {
 	usleep(ms * 1000);
@@ -123,6 +131,8 @@ cJSON *tool_screenshot(const cJSON *params)
 {
 	int full_screen = json_bool(params, "fullScreen", 0);
 	unsigned long wid = resolve_window(params);
+	if (!full_screen && !wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 
 	unsigned long target = 0; /* 0 = root for full_screen */
 	if (!full_screen) {
@@ -267,6 +277,8 @@ cJSON *tool_focus_window(const cJSON *params)
 cJSON *tool_click(const cJSON *params)
 {
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	int x = json_int(params, "x", 0);
 	int y = json_int(params, "y", 0);
 	int button = json_button(params, "button", 1);
@@ -537,6 +549,8 @@ cJSON *tool_click_text(const cJSON *params)
 	int button = json_button(params, "button", 1);
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	unsigned long target = wid ? wid : x11_get_active_window();
 
 	WindowInfo info;
@@ -784,6 +798,8 @@ cJSON *tool_read_screen_text(const cJSON *params)
 	}
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	unsigned long target = wid ? wid : x11_get_active_window();
 
 	/* Screenshot */
@@ -992,8 +1008,14 @@ static int launch_detached(const char *command, const cJSON *args,
 			_exit(0);
 		}
 
-		if (setenv("DBUS_SESSION_BUS_ADDRESS", "", 1) != 0)
-			report_launch_error(status_pipe[1], errno);
+		/* Isolated (headless) launches must not inherit the host session
+		 * bus; blank it so the app can't attach to the real desktop. On a
+		 * visible-desktop launch we keep DBUS_SESSION_BUS_ADDRESS intact so
+		 * D-Bus-activated apps (e.g. gnome-terminal) can start. */
+		if (headless) {
+			if (setenv("DBUS_SESSION_BUS_ADDRESS", "", 1) != 0)
+				report_launch_error(status_pipe[1], errno);
+		}
 		if (env && cJSON_IsObject(env)) {
 			cJSON *item = NULL;
 			cJSON_ArrayForEach(item, env) {
@@ -1118,6 +1140,8 @@ cJSON *tool_type_text(const cJSON *params)
 	int delay = json_int(params, "delay", 12);
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (wid) {
 		x11_focus_window(wid);
 		usleep_ms(50);
@@ -1137,6 +1161,8 @@ cJSON *tool_key_press(const cJSON *params)
 	const char *keys = json_str(params, "keys", "");
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (wid) {
 		x11_focus_window(wid);
 		usleep_ms(50);
@@ -1154,6 +1180,8 @@ cJSON *tool_key_press(const cJSON *params)
 cJSON *tool_get_window_geometry(const cJSON *params)
 {
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (!wid) wid = x11_get_active_window();
 
 	WindowInfo info;
@@ -1180,6 +1208,8 @@ cJSON *tool_get_window_geometry(const cJSON *params)
 cJSON *tool_resize_window(const cJSON *params)
 {
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (!wid) wid = x11_get_active_window();
 
 	int width = json_int(params, "width", 800);
@@ -1231,6 +1261,8 @@ cJSON *tool_mouse_move(const cJSON *params)
 	int y = json_int(params, "y", 0);
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (wid) {
 		WindowInfo info;
 		if (x11_get_window_info(wid, &info) == 0) {
@@ -1267,6 +1299,8 @@ cJSON *tool_scroll(const cJSON *params)
 	int clicks = json_int(params, "clicks", 3);
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (wid) {
 		x11_focus_window(wid);
 		usleep_ms(50);
@@ -1292,6 +1326,8 @@ cJSON *tool_drag(const cJSON *params)
 	int steps = json_int(params, "steps", 10);
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (wid) {
 		x11_focus_window(wid);
 		usleep_ms(100);
@@ -1327,6 +1363,8 @@ cJSON *tool_mouse_down(const cJSON *params)
 	int y = json_int(params, "y", -1);
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	if (wid && getenv("DESKPAL_HEADLESS_ACTIVE"))
 		x11_focus_window(wid);
 	if (wid && x >= 0 && y >= 0) {
@@ -1494,11 +1532,29 @@ static int box_was_present_before(const OcrBox *b, const OcrResult *before)
 	int cy = b->y + b->height / 2;
 	for (int i = 0; i < before->count; i++) {
 		const OcrBox *o = &before->boxes[i];
-		if (strcmp(o->text, b->text) != 0) continue;
 		int ocx = o->x + o->width / 2;
 		int ocy = o->y + o->height / 2;
 		/* Allow ±20 px drift in either axis. */
-		if (abs(ocx - cx) <= 20 && abs(ocy - cy) <= 20) return 1;
+		if (strcasecmp(o->text, b->text) == 0 &&
+		    abs(ocx - cx) <= 20 && abs(ocy - cy) <= 20)
+			return 1;
+
+		/* Tesseract may split one stable label into different fragments on
+		 * consecutive passes. Substantial geometric overlap still means the
+		 * pixels occupied by this word were already present. */
+		int left = b->x > o->x ? b->x : o->x;
+		int top = b->y > o->y ? b->y : o->y;
+		int right = b->x + b->width < o->x + o->width
+			? b->x + b->width : o->x + o->width;
+		int bottom = b->y + b->height < o->y + o->height
+			? b->y + b->height : o->y + o->height;
+		if (right > left && bottom > top) {
+			int overlap = (right - left) * (bottom - top);
+			int b_area = b->width * b->height;
+			int o_area = o->width * o->height;
+			int smaller = b_area < o_area ? b_area : o_area;
+			if (smaller > 0 && overlap * 2 >= smaller) return 1;
+		}
 	}
 	return 0;
 }
@@ -1515,6 +1571,8 @@ cJSON *tool_hover_text(const cJSON *params)
 	if (!text[0]) return mcp_text_result("Missing 'text' parameter");
 
 	unsigned long wid = resolve_window(params);
+	if (!wid && explicit_window_requested(params))
+		return mcp_text_result("Window not found");
 	unsigned long target = wid ? wid : x11_get_active_window();
 
 	WindowInfo info;
@@ -1523,18 +1581,18 @@ cJSON *tool_hover_text(const cJSON *params)
 	}
 
 	/* Locate the target text in the window. */
-	OcrResult before = { 0 };
-	ocr_screenshot(target, &before);
-	if (before.count == 0) {
-		ocr_result_free(&before);
+	OcrResult target_ocr = { 0 };
+	ocr_screenshot(target, &target_ocr);
+	if (target_ocr.count == 0) {
+		ocr_result_free(&target_ocr);
 		return mcp_text_result("OCR returned no words for the target window");
 	}
 
 	int n_matches = 0;
-	OcrMatch *matches = ocr_find_text(&before, text, &n_matches);
+	OcrMatch *matches = ocr_find_text(&target_ocr, text, &n_matches);
 	if (n_matches == 0) {
 		free(matches);
-		ocr_result_free(&before);
+		ocr_result_free(&target_ocr);
 		char buf[160];
 		snprintf(buf, sizeof(buf), "Text \"%s\" not found on screen", text);
 		return mcp_text_result(buf);
@@ -1546,8 +1604,18 @@ cJSON *tool_hover_text(const cJSON *params)
 	int rel_y = hit.y + hit.height / 2;
 	int hover_x = info.x + rel_x;
 	int hover_y = info.y + rel_y;
-	if (getenv("DESKPAL_HEADLESS_ACTIVE"))
-		x11_focus_window(target);
+	ocr_result_free(&target_ocr);
+
+	/* Make sure the target is actually exposed before moving the real cursor;
+	 * direct window capture can see an obscured window, but the pointer cannot. */
+	x11_focus_window(target);
+	usleep_ms(100);
+
+	/* Tooltip windows live outside the target window. Capture the whole screen
+	 * both before and after hovering so the diff uses one coordinate space and
+	 * unchanged desktop text is not mistaken for tooltip content. */
+	OcrResult before = { 0 };
+	ocr_screenshot(0, &before);
 	if (x11_is_wayland()) {
 		x11_window_mouse_move(target, rel_x, rel_y);
 	} else {
@@ -1566,6 +1634,11 @@ cJSON *tool_hover_text(const cJSON *params)
 	int new_words = 0;
 	for (int i = 0; i < after.count && bpos < (int)sizeof(body) - 64; i++) {
 		const OcrBox *b = &after.boxes[i];
+		int cx = b->x + b->width / 2;
+		int cy = b->y + b->height / 2;
+		if (cx < hover_x - 400 || cx > hover_x + 800 ||
+		    cy < hover_y - 150 || cy > hover_y + 500)
+			continue;
 		if (box_was_present_before(b, &before)) continue;
 		if (b->confidence < 40) continue;
 		bpos += snprintf(body + bpos, sizeof(body) - bpos,
