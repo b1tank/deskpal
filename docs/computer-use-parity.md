@@ -152,7 +152,7 @@ capability as unverified.
 - ASan + UBSan deterministic suites: all pass.
 - General live desktop suite: 16 pass, 0 fail, 5 BLOCKED (all native-Wayland
   dialog operations).
-- Canonical System Monitor suite: 39 direct passes, 0-1 compositor-popup OCR
+- Canonical System Monitor suite: 39 direct passes, 0-2 compositor-popup OCR
   cases BLOCKED per run, and no deterministic failures after keyboard fallback
   for the focused `Refresh` row. Which popup row is visible to X11 capture can
   vary by compositor frame; deterministic OCR interaction remains covered by
