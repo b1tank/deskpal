@@ -11,6 +11,10 @@ The comparison is about the computer-control engine, not Claude's surrounding
 product UI, account entitlements, browser connector, or model-side safety
 classifier.
 
+See [humanlike-computer-use-experiments.md](humanlike-computer-use-experiments.md)
+for measured AT-SPI, native-Wayland portal, semantic identity, focus-event,
+and verified-action prototypes with production effort estimates.
+
 ## Current parity
 
 | Capability | Claude computer use | Deskpal | Status |
