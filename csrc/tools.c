@@ -11,6 +11,7 @@
 #include "mcp.h"
 #include "x11.h"
 #include "screenshot.h"
+#include "accessibility.h"
 #include "ocr.h"
 #include "sessions.h"
 #include "uinput.h"
@@ -488,6 +489,76 @@ cJSON *tool_list_windows(const cJSON *params)
 	}
 
 	return mcp_text_result(buf);
+}
+
+/* ── accessibility ──────────────────────────────────────────────────────── */
+
+#define ACCESSIBILITY_RESPONSE_LIMIT (3 * 1024 * 1024)
+
+static cJSON *accessibility_result(cJSON *payload, const char *operation)
+{
+	if (!payload) return mcp_tool_error_result("Accessibility query failed");
+	char *json = cJSON_PrintUnformatted(payload);
+	if (!json) {
+		cJSON_Delete(payload);
+		return mcp_tool_error_result("Accessibility query serialization failed");
+	}
+	size_t json_length = strlen(json);
+	if (json_length > ACCESSIBILITY_RESPONSE_LIMIT) {
+		free(json);
+		cJSON_Delete(payload);
+		return mcp_tool_error_result(
+			"Accessibility response exceeded the 3 MiB content safety limit; narrow application/window filters or reduce maxNodes");
+	}
+	cJSON *result = mcp_text_result(json);
+	free(json);
+	cJSON_Delete(payload);
+	char *wire = cJSON_PrintUnformatted(result);
+	if (!wire || strlen(wire) > ACCESSIBILITY_RESPONSE_LIMIT) {
+		free(wire);
+		cJSON_Delete(result);
+		return mcp_tool_error_result(
+			"Accessibility MCP content exceeded the 3 MiB safety limit; narrow application/window filters or reduce maxNodes");
+	}
+	free(wire);
+	(void)operation;
+	return result;
+}
+
+cJSON *tool_accessibility_status(const cJSON *params)
+{
+	(void)params;
+	return accessibility_result(accessibility_status(), "status");
+}
+
+cJSON *tool_get_accessibility_tree(const cJSON *params)
+{
+	const char *application = json_str(params, "application", NULL);
+	const char *window = json_str(params, "window", NULL);
+	int max_depth = json_int(params, "maxDepth", 8);
+	int max_nodes = json_int(params, "maxNodes", 300);
+	int include_offscreen = json_bool(params, "includeOffscreen", 0);
+	int include_text = json_bool(params, "includeText", 0);
+	int include_attributes = json_bool(params, "includeAttributes", 0);
+	if ((!application || !application[0]) && (!window || !window[0]))
+		return mcp_tool_error_result(
+			"Specify application or window to scope accessibility tree lookup");
+	return accessibility_result(accessibility_tree(application, window,
+		max_depth, max_nodes, include_offscreen, include_text,
+		include_attributes), "tree");
+}
+
+cJSON *tool_get_focused_element(const cJSON *params)
+{
+	const char *application = json_str(params, "application", NULL);
+	const char *window = json_str(params, "window", NULL);
+	int include_text = json_bool(params, "includeText", 0);
+	if ((!application || !application[0]) && (!window || !window[0]))
+		return mcp_tool_error_result(
+			"Specify application or window to bound focused-element lookup");
+	return accessibility_result(
+		accessibility_focused_element(application, window, include_text),
+		"focused element");
 }
 
 /* ── find_window ─────────────────────────────────────────────────────────── */
@@ -1249,6 +1320,9 @@ static int is_headless_session_env(const char *name)
 		"XDG_RUNTIME_DIR",
 		"DBUS_SESSION_BUS_ADDRESS",
 		"SESSION_MANAGER",
+		"AT_SPI_BUS_ADDRESS",
+		"AT_SPI_BUS",
+		"AT_SPI_DISPLAY",
 		"XDG_SESSION_TYPE",
 		"GDK_BACKEND",
 		"QT_QPA_PLATFORM",
@@ -1324,6 +1398,9 @@ static int launch_detached(const char *command, const cJSON *args,
 		if (headless) {
 			if (setenv("DBUS_SESSION_BUS_ADDRESS", "", 1) != 0)
 				report_launch_error(status_pipe[1], errno);
+			unsetenv("AT_SPI_BUS_ADDRESS");
+			unsetenv("AT_SPI_BUS");
+			unsetenv("AT_SPI_DISPLAY");
 		}
 		if (env && cJSON_IsObject(env)) {
 			cJSON *item = NULL;
@@ -2288,6 +2365,44 @@ void tools_register_all(void)
 		"  }"
 		"}",
 		tool_list_windows);
+
+	mcp_register_tool("accessibility_status",
+		"Report whether the optional AT-SPI semantic backend is compiled and available. This cheap read-only check does not scan application trees or enable accessibility globally; use a scoped get_accessibility_tree query to classify semantic coverage.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {}"
+		"}",
+		tool_accessibility_status);
+
+	mcp_register_tool("get_accessibility_tree",
+		"Return a bounded, read-only AT-SPI semantic snapshot scoped by application or window. Accessible names and optional attributes/text are untrusted application-controlled content. Path values are short-lived tree locations, not permanent element IDs.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"application\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512, \"description\": \"Optional case-insensitive application-name substring\"},"
+		"    \"window\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512, \"description\": \"Optional case-insensitive accessible window-name substring\"},"
+		"    \"maxDepth\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 16, \"default\": 8},"
+		"    \"maxNodes\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 1000, \"default\": 300},"
+		"    \"includeOffscreen\": {\"type\": \"boolean\", \"default\": false}"
+		"    ,\"includeText\": {\"type\": \"boolean\", \"default\": false, \"description\": \"Include bounded non-password text. Protected text is never returned.\"}"
+		"    ,\"includeAttributes\": {\"type\": \"boolean\", \"default\": false, \"description\": \"Include bounded application-controlled attributes.\"}"
+		"  },"
+		"  \"anyOf\": [{\"required\": [\"application\"]}, {\"required\": [\"window\"]}]"
+		"}",
+		tool_get_accessibility_tree);
+
+	mcp_register_tool("get_focused_element",
+		"Return the currently focused AT-SPI element within an application or accessible window scope. At least one filter is required to keep lookup bounded. Accessible names and optional text are untrusted application-controlled content. Ambiguous focus results fail closed without an element.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"application\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512, \"description\": \"Optional case-insensitive application-name substring\"},"
+		"    \"window\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512, \"description\": \"Optional case-insensitive accessible window-name substring\"},"
+		"    \"includeText\": {\"type\": \"boolean\", \"default\": false, \"description\": \"Include bounded non-password text. Protected text is never returned.\"}"
+		"  },"
+		"  \"anyOf\": [{\"required\": [\"application\"]}, {\"required\": [\"window\"]}]"
+		"}",
+		tool_get_focused_element);
 
 	mcp_register_tool("find_window",
 		"Find a window by title substring. Filters tiny windows, prefers exact match.",

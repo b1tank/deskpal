@@ -12,6 +12,9 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 |------|-------------|
 | `screenshot` | Capture any window or full screen as PNG; optionally downscale with source-coordinate metadata |
 | `list_windows` | List top-level app windows with IDs, titles, `WM_CLASS`, geometry, PID; optionally include recursive helpers/dialogs |
+| `accessibility_status` | Cheaply report whether the optional AT-SPI backend is compiled and connected |
+| `get_accessibility_tree` | Return a scoped, bounded semantic tree with roles, names, states, logical bounds, actions, optional attributes/text, and short-lived locators |
+| `get_focused_element` | Return the true focused AT-SPI child within a required application/window scope; ambiguous results fail closed |
 | `find_window` | Find a window by title substring |
 | `focus_window` | Bring a window to front and give it input focus |
 | `click` | Click at (x, y) relative to a window. Supports left/right/middle buttons |
@@ -56,6 +59,23 @@ sudo apt-get install meson ninja-build gcc \
   libxdo-dev libpng-dev libdbus-1-dev \
   libtesseract-dev libleptonica-dev
 ```
+
+Optional semantic accessibility support is built when `libatspi2.0-dev` is
+installed:
+
+```bash
+sudo apt-get install libatspi2.0-dev libglib2.0-dev
+```
+
+Deskpal never enables accessibility globally. `accessibility_status` cheaply
+reports backend availability; scoped tree results report `empty`, `semantic`,
+or `error`. Electron apps may need launch-time accessibility
+support such as `--force-renderer-accessibility` before they expose useful
+descendants. Accessibility paths are short-lived tree locations, not permanent
+element IDs; re-query before relying on them. Accessible names, optional
+attributes, and optional text are application-controlled, potentially private
+or adversarial content. Text and attributes are omitted unless explicitly
+requested, and password text is never returned.
 
 Your user must have access to `/dev/uinput` for virtual input devices:
 

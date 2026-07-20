@@ -3,3 +3,5 @@ build/
 *.a
 *.tgz
 node_modules/
+__pycache__/
+*.pyc

@@ -8,6 +8,8 @@ xcb_shm_dep   = dependency('xcb-shm')
 x11_dep       = dependency('x11')
 png_dep       = dependency('libpng', required : true)
 dbus_dep      = dependency('dbus-1', required : true)
+atspi_dep     = dependency('atspi-2', required : get_option('atspi'))
+gobject_dep   = dependency('gobject-2.0', required : atspi_dep.found())
 
 # libxdo doesn't have pkg-config, use compiler check
 cc = meson.get_compiler('c')
@@ -35,6 +37,7 @@ core_src = files(
   'csrc/tools.c',
   'csrc/sessions.c',
   'csrc/control.c',
+  'csrc/accessibility.c',
 )
 
 c_args = ['-D_GNU_SOURCE']
@@ -44,10 +47,19 @@ if tesseract_dep.found() and lept_dep.found()
   c_args += '-DHAVE_TESSERACT=1'
 endif
 
+if atspi_dep.found()
+  c_args += '-DHAVE_ATSPI=1'
+endif
+
+core_deps = [xcb_dep, xcb_shm_dep, x11_dep, x11xcb_dep, xdo_dep, png_dep, dbus_dep]
+if atspi_dep.found()
+  core_deps += [atspi_dep, gobject_dep]
+endif
+
 executable('deskpal',
   core_src, vendor_src,
   include_directories : [vendor_inc, include_directories('csrc')],
-  dependencies : [xcb_dep, xcb_shm_dep, x11_dep, x11xcb_dep, xdo_dep, png_dep, dbus_dep],
+  dependencies : core_deps,
   c_args : c_args,
   link_args : link_args + ['-ldl'],  # for dlopen
   install : true)

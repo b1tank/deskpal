@@ -132,8 +132,10 @@ def main():
         with open(runtime_probe, "w", encoding="ascii") as script:
             script.write(
                 "#!/bin/sh\n"
-                'printf "%s|%s\\n" "${XDG_RUNTIME_DIR-unset}" '
-                '"${WAYLAND_DISPLAY-unset}" > "$DESKPAL_RUNTIME_PROBE"\n'
+                'printf "%s|%s|%s|%s|%s\\n" "${XDG_RUNTIME_DIR-unset}" '
+                '"${WAYLAND_DISPLAY-unset}" "${AT_SPI_BUS_ADDRESS-unset}" '
+                '"${AT_SPI_BUS-unset}" "${AT_SPI_DISPLAY-unset}" '
+                '> "$DESKPAL_RUNTIME_PROBE"\n'
                 "exec xmessage \"$@\"\n"
             )
         os.chmod(runtime_probe, 0o755)
@@ -143,6 +145,9 @@ def main():
         env["DESKPAL_RUNTIME_PROBE"] = runtime_probe_output
         env["XDG_RUNTIME_DIR"] = os.path.join(temp_dir, "host-runtime")
         env["WAYLAND_DISPLAY"] = "wayland-host"
+        env["AT_SPI_BUS_ADDRESS"] = "unix:path=/host/at-spi-bus"
+        env["AT_SPI_BUS"] = "host-at-spi-bus"
+        env["AT_SPI_DISPLAY"] = "host-at-spi-display"
         client = DeskpalClient(
             env, args=["--no-uinput", "--allow-exec"], name="e2e-isolation"
         )
@@ -188,6 +193,9 @@ def main():
                         "XAUTHORITY": "/does/not/exist",
                         "WAYLAND_DISPLAY": "wayland-do-not-use",
                         "XDG_RUNTIME_DIR": "/host/runtime/do-not-use",
+                        "AT_SPI_BUS_ADDRESS": "unix:path=/override/at-spi-bus",
+                        "AT_SPI_BUS": "override-at-spi-bus",
+                        "AT_SPI_DISPLAY": "override-at-spi-display",
                         "DESKPAL_LITERAL_ENV": f"value; touch {launch_sentinel}",
                     },
                 },
@@ -199,7 +207,7 @@ def main():
                 "launch arguments or environment were interpreted as shell syntax"
             )
             with open(runtime_probe_output, encoding="ascii") as probe_file:
-                assert probe_file.read().strip() == "unset|unset"
+                assert probe_file.read().strip() == "unset|unset|unset|unset|unset"
             new_children = direct_children(client.proc.pid) - children_before
             assert len(new_children) == 1, new_children
             session_process_group = new_children.pop()

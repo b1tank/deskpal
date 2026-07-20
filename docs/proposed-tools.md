@@ -24,7 +24,7 @@ splits the run between two tool surfaces.
 
 **Surfaced by**: OTelux self-verify §2.2 (EndpointBar URL copy).
 
-**Proposed signature**:
+**Shipped signature**:
 
 ```jsonc
 {
@@ -282,24 +282,28 @@ accent border that OCR can't resolve.
   "name": "get_focused_element",
   "inputSchema": {
     "type": "object",
-    "properties": { "window": { "type": "string" } }
+    "properties": {
+      "application": { "type": "string", "minLength": 1, "maxLength": 512 },
+      "window": { "type": "string", "minLength": 1, "maxLength": 512 },
+      "includeText": { "type": "boolean", "default": false }
+    },
+    "anyOf": [
+      { "required": ["application"] },
+      { "required": ["window"] }
+    ]
   },
-  "returns": {
-    "kind": "string",
-    "label": "string",
-    "bounds": { "x": "integer", "y": "integer", "w": "integer", "h": "integer" }
-  }
+  "returns": "Bounded JSON in MCP text content. Ambiguous or incomplete lookups omit element."
 }
 ```
 
 **Implementation notes**:
 - X11 AT-SPI (`libatspi-2.0`) gives accessibility-tree introspection
   including focused element. Most GTK/Qt apps participate.
-- Electron also exposes AT-SPI but a dedicated CDP path (querying
-  `document.activeElement` via the app's --remote-debugging-port) is
-  more reliable for our use case. Could be a `--for-electron` flag on
-  the tool.
-- For other apps, AT-SPI is the only path; will be partial.
+- Electron exposes rich AT-SPI trees when renderer accessibility is enabled,
+  for example with `--force-renderer-accessibility`; otherwise it may expose
+  only an application/frame shell.
+- Accessible names and optional text are application-controlled, untrusted
+  content. Password text is never returned.
 
 ---
 

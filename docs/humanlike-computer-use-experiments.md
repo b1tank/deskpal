@@ -152,13 +152,20 @@ identity/placement; a global scale factor is insufficient.
 
 - optional `atspi-2` Meson dependency
 - long-lived accessibility backend object
-- capability reporting: unavailable, shell-only, or rich
-- `list_accessible_apps`, `get_accessibility_tree`, and
-  `get_focused_element`
+- cheap backend availability reporting
+- scoped `get_accessibility_tree` and `get_focused_element`
 - bounded traversal, stale-object handling, and privacy filtering
 - deterministic GTK fixture tests
 
 This is the smallest useful production slice and should be implemented first.
+
+Implemented on 2026-07-20: optional `atspi-2` build integration,
+`accessibility_status`, bounded `get_accessibility_tree`, and
+`get_focused_element`, with deterministic private D-Bus/AT-SPI fixture tests.
+The tools are read-only, preserve existing X11 routing, do not enable host
+accessibility settings, expose semantic locators as short-lived paths, omit
+text/attributes by default, redact password text, and mark semantic content as
+untrusted application output.
 
 ### Slice 2: Semantic actions and verified transactions (2-3 weeks)
 

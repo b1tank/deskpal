@@ -10,6 +10,7 @@
 #include "sessions.h"
 #include "tools.h"
 #include "control.h"
+#include "accessibility.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -93,6 +94,9 @@ static int reexec_headless(int argc, char **argv, int width, int height)
 	unsetenv("XDG_RUNTIME_DIR");
 	unsetenv("DBUS_SESSION_BUS_ADDRESS");
 	unsetenv("SESSION_MANAGER");
+	unsetenv("AT_SPI_BUS_ADDRESS");
+	unsetenv("AT_SPI_BUS");
+	unsetenv("AT_SPI_DISPLAY");
 	setenv("XDG_SESSION_TYPE", "x11", 1);
 	setenv("GDK_BACKEND", "x11", 1);
 	setenv("QT_QPA_PLATFORM", "xcb", 1);
@@ -156,6 +160,10 @@ int main(int argc, char **argv)
 		        "Install: sudo apt install tesseract-ocr\n");
 	}
 
+	if (accessibility_init() != 0) {
+		fprintf(stderr, "deskpal: AT-SPI accessibility backend unavailable\n");
+	}
+
 	tools_register_all();
 	sessions_init();
 
@@ -163,6 +171,7 @@ int main(int argc, char **argv)
 
 	sessions_cleanup_all();
 	control_cleanup();
+	accessibility_cleanup();
 	ocr_cleanup();
 	x11_cleanup();
 	return rc;

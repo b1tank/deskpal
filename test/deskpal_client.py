@@ -150,6 +150,9 @@ def start_xvfb(temp_dir, screen_size="1280x800"):
         "XDG_RUNTIME_DIR",
         "DBUS_SESSION_BUS_ADDRESS",
         "SESSION_MANAGER",
+        "AT_SPI_BUS_ADDRESS",
+        "AT_SPI_BUS",
+        "AT_SPI_DISPLAY",
     ):
         env.pop(name, None)
     env.update(

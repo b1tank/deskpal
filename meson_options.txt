@@ -1,0 +1,6 @@
+option(
+  'atspi',
+  type : 'feature',
+  value : 'auto',
+  description : 'Build optional AT-SPI semantic accessibility support',
+)

@@ -17,8 +17,14 @@ the user's visible desktop:
 - `e2e_computer_use.py`: deterministic Tk workflow for app identity, screenshot
   scaling metadata, screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
   controller lock contention/release, and isolated-operation independence.
+- `e2e_accessibility.py`: optional AT-SPI tool schemas, unavailable capability,
+  bounded semantic tree output, filtering/truncation, logical bounds, actions,
+  opt-in attributes/text, privacy redaction, completion metadata, and true
+  focused-element lookup. Semantic coverage runs inside
+  private Xvfb and D-Bus/AT-SPI sessions and does not change host accessibility
+  settings.
 
-Both suites use `deskpal_client.py`. New protocol tests should use this client
+All suites use `deskpal_client.py`. New protocol tests should use this client
 instead of copying JSON-RPC transport code.
 
 ## Sanitizers
@@ -36,9 +42,10 @@ PNG, process, or session-lifecycle changes.
 ```bash
 npm run test:isolation
 npm run test:computer-use
+npm run test:accessibility
 ```
 
-Set `DESKPAL_TEST_BINARY=/absolute/path/to/deskpal` to run either suite against
+Set `DESKPAL_TEST_BINARY=/absolute/path/to/deskpal` to run any suite against
 an alternate build.
 
 ## Live desktop tests

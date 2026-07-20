@@ -42,7 +42,10 @@ void mcp_register_tool(const char *name, const char *description,
 	}
 	g_schemas[g_tool_count] = schema;
 	if (strcmp(name, "launch_isolated_app") != 0 &&
-	    strcmp(name, "close_isolated_session") != 0) {
+	    strcmp(name, "close_isolated_session") != 0 &&
+	    strcmp(name, "accessibility_status") != 0 &&
+	    strcmp(name, "get_accessibility_tree") != 0 &&
+	    strcmp(name, "get_focused_element") != 0) {
 		cJSON *properties = cJSON_GetObjectItem(schema, "properties");
 		if (properties && cJSON_IsObject(properties) &&
 		    !cJSON_GetObjectItem(properties, "sessionId")) {
@@ -213,6 +216,20 @@ static int valid_button(const cJSON *arguments)
 	return integer_in_range(arguments, "button", 1, 3);
 }
 
+static int boolean_if_present(const cJSON *arguments, const char *key)
+{
+	const cJSON *item = arguments ? cJSON_GetObjectItem(arguments, key) : NULL;
+	return !item || cJSON_IsBool(item);
+}
+
+static int bounded_string_if_present(const cJSON *arguments, const char *key,
+	                                  size_t maximum)
+{
+	const cJSON *item = arguments ? cJSON_GetObjectItem(arguments, key) : NULL;
+	return !item || (cJSON_IsString(item) && item->valuestring[0] &&
+		strlen(item->valuestring) <= maximum);
+}
+
 static cJSON *validate_tool_arguments(const char *tool_name,
 	                                  const cJSON *arguments)
 {
@@ -288,6 +305,25 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 	if (strcmp(tool_name, "read_file") == 0 &&
 	    !integer_in_range(arguments, "maxBytes", 1, 16 * 1024 * 1024))
 		return mcp_tool_error_result("maxBytes must be an integer between 1 and 16777216");
+	if (strcmp(tool_name, "get_accessibility_tree") == 0 &&
+	    (!integer_in_range(arguments, "maxDepth", 1, 16) ||
+	     !integer_in_range(arguments, "maxNodes", 1, 1000)))
+		return mcp_tool_error_result(
+			"maxDepth must be an integer between 1 and 16 and maxNodes between 1 and 1000");
+	if (strcmp(tool_name, "get_accessibility_tree") == 0 ||
+	    strcmp(tool_name, "get_focused_element") == 0) {
+		const char *keys[] = { "application", "window" };
+		for (int i = 0; i < 2; i++) {
+			if (!bounded_string_if_present(arguments, keys[i], 512))
+				return mcp_tool_error_result(
+					"application/window filters must be non-empty strings of at most 512 bytes");
+		}
+		if (!boolean_if_present(arguments, "includeText") ||
+		    !boolean_if_present(arguments, "includeOffscreen") ||
+		    !boolean_if_present(arguments, "includeAttributes"))
+			return mcp_tool_error_result(
+				"includeText/includeOffscreen/includeAttributes must be booleans when provided");
+	}
 	if (strcmp(tool_name, "type_text") == 0) {
 		if (!integer_in_range(arguments, "delay", 0, 1000))
 			return mcp_tool_error_result("delay must be an integer between 0 and 1000 ms");
@@ -351,7 +387,16 @@ static cJSON *handle_tools_call(const cJSON *params)
 		? cJSON_GetObjectItem(arguments, "sessionId") : NULL;
 	int session_routable =
 		strcmp(tool_name, "launch_isolated_app") != 0 &&
-		strcmp(tool_name, "close_isolated_session") != 0;
+		strcmp(tool_name, "close_isolated_session") != 0 &&
+		strcmp(tool_name, "accessibility_status") != 0 &&
+		strcmp(tool_name, "get_accessibility_tree") != 0 &&
+		strcmp(tool_name, "get_focused_element") != 0;
+	if (session_id && !session_routable &&
+	    (strcmp(tool_name, "accessibility_status") == 0 ||
+	     strcmp(tool_name, "get_accessibility_tree") == 0 ||
+	     strcmp(tool_name, "get_focused_element") == 0))
+		return mcp_tool_error_result(
+			"Accessibility tools inspect the visible desktop only; sessionId is not supported");
 	if (session_id && session_routable &&
 	    (!cJSON_IsString(session_id) || !session_id->valuestring[0])) {
 		return mcp_tool_error_result(
@@ -371,7 +416,8 @@ static cJSON *handle_tools_call(const cJSON *params)
 		if (control_acquire(error, sizeof(error)) != 0)
 			return mcp_tool_error_result(error);
 	}
-	return tool->handler(arguments ? arguments : cJSON_CreateObject());
+	static const cJSON empty_arguments = { .type = cJSON_Object };
+	return tool->handler(arguments ? arguments : &empty_arguments);
 }
 
 /* ── Main loop ────────────────────────────────────────────────────────────── */
