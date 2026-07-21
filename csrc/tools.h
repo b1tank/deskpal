@@ -42,6 +42,7 @@ cJSON *tool_exec(const cJSON *params);
 cJSON *tool_accessibility_status(const cJSON *params);
 cJSON *tool_get_accessibility_tree(const cJSON *params);
 cJSON *tool_get_focused_element(const cJSON *params);
+cJSON *tool_accessibility_action(const cJSON *params);
 
 /* Security gates set by CLI flags in main.c. Default 0 (off). */
 extern int deskpal_allow_fs;

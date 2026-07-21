@@ -45,7 +45,8 @@ void mcp_register_tool(const char *name, const char *description,
 	    strcmp(name, "close_isolated_session") != 0 &&
 	    strcmp(name, "accessibility_status") != 0 &&
 	    strcmp(name, "get_accessibility_tree") != 0 &&
-	    strcmp(name, "get_focused_element") != 0) {
+	    strcmp(name, "get_focused_element") != 0 &&
+	    strcmp(name, "accessibility_action") != 0) {
 		cJSON *properties = cJSON_GetObjectItem(schema, "properties");
 		if (properties && cJSON_IsObject(properties) &&
 		    !cJSON_GetObjectItem(properties, "sessionId")) {
@@ -230,6 +231,55 @@ static int bounded_string_if_present(const cJSON *arguments, const char *key,
 		strlen(item->valuestring) <= maximum);
 }
 
+static int valid_accessibility_path(const cJSON *path)
+{
+	if (!path) return 1;
+	if (!cJSON_IsArray(path) || cJSON_GetArraySize(path) > 32) return 0;
+	for (int i = 0; i < cJSON_GetArraySize(path); i++) {
+		const cJSON *index = cJSON_GetArrayItem(path, i);
+		if (!cJSON_IsNumber(index) || !isfinite(index->valuedouble) ||
+		    floor(index->valuedouble) != index->valuedouble ||
+		    index->valuedouble < 0 || index->valuedouble > 4096)
+			return 0;
+	}
+	return 1;
+}
+
+static int valid_accessibility_selector(const cJSON *selector)
+{
+	if (!selector || !cJSON_IsObject(selector)) return 0;
+	if (!bounded_string_if_present(selector, "role", 128)) return 0;
+	const cJSON *role = cJSON_GetObjectItem(selector, "role");
+	if (!role) return 0;
+	if (!bounded_string_if_present(selector, "name", 512)) return 0;
+	const cJSON *name = cJSON_GetObjectItem(selector, "name");
+	const cJSON *path = cJSON_GetObjectItem(selector, "path");
+	if (!valid_accessibility_path(path)) return 0;
+	if (path) {
+		const cJSON *bus_name = cJSON_GetObjectItem(selector, "busName");
+		const cJSON *object_path = cJSON_GetObjectItem(selector, "objectPath");
+		if (!bus_name || !cJSON_IsString(bus_name) ||
+		    !bus_name->valuestring[0] || strlen(bus_name->valuestring) > 255 ||
+		    !object_path || !cJSON_IsString(object_path) ||
+		    !object_path->valuestring[0] ||
+		    strlen(object_path->valuestring) > 1024 ||
+		    !integer_in_range(selector, "processId", 1, 2147483647))
+			return 0;
+	}
+	return name || path;
+}
+
+static int valid_accessibility_state(const char *state)
+{
+	static const char *states[] = {
+		"focused", "checked", "selected", "enabled", "editable",
+		"showing", NULL
+	};
+	for (int i = 0; states[i]; i++)
+		if (strcmp(state, states[i]) == 0) return 1;
+	return 0;
+}
+
 static cJSON *validate_tool_arguments(const char *tool_name,
 	                                  const cJSON *arguments)
 {
@@ -311,7 +361,8 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 		return mcp_tool_error_result(
 			"maxDepth must be an integer between 1 and 16 and maxNodes between 1 and 1000");
 	if (strcmp(tool_name, "get_accessibility_tree") == 0 ||
-	    strcmp(tool_name, "get_focused_element") == 0) {
+	    strcmp(tool_name, "get_focused_element") == 0 ||
+	    strcmp(tool_name, "accessibility_action") == 0) {
 		const char *keys[] = { "application", "window" };
 		for (int i = 0; i < 2; i++) {
 			if (!bounded_string_if_present(arguments, keys[i], 512))
@@ -323,6 +374,74 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 		    !boolean_if_present(arguments, "includeAttributes"))
 			return mcp_tool_error_result(
 				"includeText/includeOffscreen/includeAttributes must be booleans when provided");
+	}
+	if (strcmp(tool_name, "accessibility_action") == 0) {
+		const cJSON *application = arguments
+			? cJSON_GetObjectItem(arguments, "application") : NULL;
+		const cJSON *window = arguments
+			? cJSON_GetObjectItem(arguments, "window") : NULL;
+		if (!application && !window)
+			return mcp_tool_error_result(
+				"accessibility_action requires application or window scope");
+		const cJSON *target = arguments
+			? cJSON_GetObjectItem(arguments, "target") : NULL;
+		if (!valid_accessibility_selector(target))
+			return mcp_tool_error_result(
+				"target requires role and a non-empty name or bounded integer path");
+		const cJSON *operation = arguments
+			? cJSON_GetObjectItem(arguments, "operation") : NULL;
+		if (!operation || !cJSON_IsString(operation) ||
+		    (strcmp(operation->valuestring, "setText") != 0 &&
+		     strcmp(operation->valuestring, "focus") != 0 &&
+		     strcmp(operation->valuestring, "invoke") != 0))
+			return mcp_tool_error_result(
+				"operation must be setText, focus, or invoke");
+		if (!integer_in_range(arguments, "timeoutMs", 1, 5000))
+			return mcp_tool_error_result(
+				"timeoutMs must be an integer between 1 and 5000");
+		const cJSON *verify = cJSON_GetObjectItem(arguments, "verify");
+		if (strcmp(operation->valuestring, "setText") == 0) {
+			const cJSON *value = cJSON_GetObjectItem(arguments, "value");
+			if (!value || !cJSON_IsString(value) ||
+			    strlen(value->valuestring) > 2048)
+				return mcp_tool_error_result(
+					"setText requires value with at most 2048 bytes");
+			if (verify)
+				return mcp_tool_error_result(
+					"setText uses automatic text verification and does not accept verify");
+		} else if (strcmp(operation->valuestring, "focus") == 0) {
+			if (verify)
+				return mcp_tool_error_result(
+					"focus uses automatic focused-state verification and does not accept verify");
+		} else {
+			if (!bounded_string_if_present(arguments, "action", 128) ||
+			    !cJSON_GetObjectItem(arguments, "action"))
+				return mcp_tool_error_result(
+					"invoke requires a named action with at most 128 bytes");
+			if (!valid_accessibility_selector(verify))
+				return mcp_tool_error_result(
+					"invoke requires a verification selector");
+			const cJSON *text_equals = cJSON_GetObjectItem(verify, "textEquals");
+			const cJSON *state = cJSON_GetObjectItem(verify, "state");
+			const cJSON *state_value = cJSON_GetObjectItem(verify, "stateValue");
+			if (!text_equals && !state)
+				return mcp_tool_error_result(
+					"verify requires textEquals and/or state");
+			if (text_equals && (!cJSON_IsString(text_equals) ||
+			    strlen(text_equals->valuestring) > 2048))
+				return mcp_tool_error_result(
+					"verify.textEquals must be a string of at most 2048 bytes");
+			if (state_value && !state)
+				return mcp_tool_error_result(
+					"verify.stateValue is only valid with verify.state");
+			if (state) {
+				if (!cJSON_IsString(state) ||
+				    !valid_accessibility_state(state->valuestring) ||
+				    !state_value || !cJSON_IsBool(state_value))
+					return mcp_tool_error_result(
+						"verify.state requires a supported state and boolean stateValue");
+			}
+		}
 	}
 	if (strcmp(tool_name, "type_text") == 0) {
 		if (!integer_in_range(arguments, "delay", 0, 1000))
@@ -390,11 +509,13 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "close_isolated_session") != 0 &&
 		strcmp(tool_name, "accessibility_status") != 0 &&
 		strcmp(tool_name, "get_accessibility_tree") != 0 &&
-		strcmp(tool_name, "get_focused_element") != 0;
+		strcmp(tool_name, "get_focused_element") != 0 &&
+		strcmp(tool_name, "accessibility_action") != 0;
 	if (session_id && !session_routable &&
 	    (strcmp(tool_name, "accessibility_status") == 0 ||
 	     strcmp(tool_name, "get_accessibility_tree") == 0 ||
-	     strcmp(tool_name, "get_focused_element") == 0))
+	     strcmp(tool_name, "get_focused_element") == 0 ||
+	     strcmp(tool_name, "accessibility_action") == 0))
 		return mcp_tool_error_result(
 			"Accessibility tools inspect the visible desktop only; sessionId is not supported");
 	if (session_id && session_routable &&

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <unistd.h>
 
 #ifdef HAVE_ATSPI
 #include <atspi/atspi.h>
@@ -76,6 +77,55 @@ typedef struct {
 	int incomplete;
 	long long deadline_ms;
 } FocusSearch;
+
+typedef struct {
+	const char *role;
+	const char *name;
+	const char *bus_name;
+	const char *object_path;
+	unsigned int process_id;
+	int path[32];
+	int path_len;
+	int has_path;
+} AccessibilitySelector;
+
+typedef struct {
+	const char *application_filter;
+	const char *window_filter;
+	const AccessibilitySelector *selector;
+	AtspiAccessible *match;
+	char application[513];
+	char window[513];
+	int path[32];
+	int path_len;
+	int match_count;
+	int visited;
+	int incomplete;
+	int exact_scope;
+	long long deadline_ms;
+} AccessibilitySearch;
+
+typedef struct {
+	char *bus_name;
+	char *object_path;
+	unsigned int process_id;
+	AtspiAccessible *object;
+} AccessibilityIdentity;
+
+typedef struct {
+	char *text;
+	int text_observed;
+	int text_truncated;
+	int state_value;
+	int state_observed;
+	int satisfied;
+} AccessibilityVerification;
+
+typedef struct {
+	int issued;
+	int reported_success;
+	int outcome_unknown;
+} AccessibilityMutation;
 
 static long long monotonic_ms(void)
 {
@@ -240,6 +290,17 @@ static cJSON *serialize_path(const int *path, int path_len)
 	for (int i = 0; i < path_len; i++)
 		cJSON_AddItemToArray(array, cJSON_CreateNumber(path[i]));
 	return array;
+}
+
+static void add_live_identity(cJSON *locator, AtspiAccessible *node)
+{
+	AtspiObject *object = node ? ATSPI_OBJECT(node) : NULL;
+	if (!locator || !object || !object->path || !object->app ||
+	    !object->app->bus_name)
+		return;
+	cJSON_AddStringToObject(locator, "busName", object->app->bus_name);
+	cJSON_AddStringToObject(locator, "objectPath", object->path);
+	cJSON_AddNumberToObject(locator, "processId", accessible_process_id(node));
 }
 
 static char *bounded_copy(const char *value, size_t limit, int *truncated)
@@ -448,9 +509,10 @@ static cJSON *serialize_node(AtspiAccessible *node,
 	cJSON_AddStringToObject(locator, "application", application ? application : "");
 	cJSON_AddStringToObject(locator, "window", window ? window : "");
 	cJSON_AddStringToObject(locator, "role", role ? role : "unknown");
-	cJSON_AddStringToObject(locator, "name",
-		protected_text ? "" : name ? name : "");
+	if (!protected_text && name && name[0])
+		cJSON_AddStringToObject(locator, "name", name);
 	cJSON_AddItemToObject(locator, "path", serialize_path(path, path_len));
+	add_live_identity(locator, node);
 	cJSON_AddItemToObject(result, "locator", locator);
 
 	cJSON_AddItemToObject(result, "states", serialize_states(states));
@@ -562,6 +624,469 @@ static int matches_filters(const char *application, const char *window,
 {
 	return contains_case_insensitive(application, application_filter) &&
 	       contains_case_insensitive(window, window_filter);
+}
+
+static int scope_matches(const char *value, const char *filter, int exact)
+{
+	if (!filter || !filter[0]) return 1;
+	if (!value) return 0;
+	return exact ? strcmp(value, filter) == 0 :
+		contains_case_insensitive(value, filter);
+}
+
+static int parse_selector(const cJSON *object, AccessibilitySelector *selector)
+{
+	if (!object || !cJSON_IsObject(object) || !selector) return -1;
+	memset(selector, 0, sizeof(*selector));
+	const cJSON *role = cJSON_GetObjectItem(object, "role");
+	const cJSON *name = cJSON_GetObjectItem(object, "name");
+	const cJSON *path = cJSON_GetObjectItem(object, "path");
+	const cJSON *bus_name = cJSON_GetObjectItem(object, "busName");
+	const cJSON *object_path = cJSON_GetObjectItem(object, "objectPath");
+	const cJSON *process_id = cJSON_GetObjectItem(object, "processId");
+	if (!cJSON_IsString(role) || !role->valuestring[0]) return -1;
+	selector->role = role->valuestring;
+	if (name) {
+		if (!cJSON_IsString(name) || !name->valuestring[0]) return -1;
+		selector->name = name->valuestring;
+	}
+	if (path) {
+		if (!cJSON_IsArray(path)) return -1;
+		int count = cJSON_GetArraySize(path);
+		if (count < 0 || count > 32) return -1;
+		selector->has_path = 1;
+		if (!cJSON_IsString(bus_name) || !bus_name->valuestring[0] ||
+		    !cJSON_IsString(object_path) || !object_path->valuestring[0] ||
+		    !cJSON_IsNumber(process_id) ||
+		    process_id->valuedouble != process_id->valueint ||
+		    process_id->valueint <= 0)
+			return -1;
+		selector->bus_name = bus_name->valuestring;
+		selector->object_path = object_path->valuestring;
+		selector->process_id = (unsigned int)process_id->valueint;
+		selector->path_len = count;
+		for (int i = 0; i < count; i++) {
+			const cJSON *index = cJSON_GetArrayItem(path, i);
+			if (!cJSON_IsNumber(index) || index->valuedouble != index->valueint ||
+			    index->valueint < 0 || index->valueint > 4096)
+				return -1;
+			selector->path[i] = index->valueint;
+		}
+	}
+	return selector->name || selector->has_path ? 0 : -1;
+}
+
+static int selector_matches(AtspiAccessible *node,
+	                        const AccessibilitySelector *selector,
+	                        const int *path, int path_len)
+{
+	if (selector->has_path) {
+		if (selector->path_len != path_len) return 0;
+		if (path_len > 0 && memcmp(selector->path, path,
+		    sizeof(int) * (size_t)path_len) != 0)
+			return 0;
+		AtspiObject *object = ATSPI_OBJECT(node);
+		if (!object || !object->path || !object->app ||
+		    !object->app->bus_name ||
+		    strcmp(selector->bus_name, object->app->bus_name) != 0 ||
+		    strcmp(selector->object_path, object->path) != 0 ||
+		    selector->process_id != accessible_process_id(node))
+			return 0;
+	}
+	char *role = accessible_role(node);
+	int role_matches = role && strcasecmp(role, selector->role) == 0;
+	g_free(role);
+	if (!role_matches) return 0;
+	if (selector->name) {
+		char *name = accessible_name(node);
+		int name_matches = name && strcmp(name, selector->name) == 0;
+		g_free(name);
+		if (!name_matches) return 0;
+	}
+	return 1;
+}
+
+static void search_selector_nodes(AccessibilitySearch *search,
+	                              AtspiAccessible *node,
+	                              const char *application,
+	                              const char *window,
+	                              int depth, int *path)
+{
+	if (search->visited >= ACCESSIBILITY_VISITED_LIMIT ||
+	    search->match_count > 1 || monotonic_ms() >= search->deadline_ms) {
+		if (search->visited >= ACCESSIBILITY_VISITED_LIMIT ||
+		    monotonic_ms() >= search->deadline_ms)
+			search->incomplete = 1;
+		return;
+	}
+	search->visited++;
+	if (selector_matches(node, search->selector, path, depth)) {
+		search->match_count++;
+		if (!search->match) {
+			search->match = g_object_ref(node);
+			snprintf(search->application, sizeof(search->application), "%s",
+				application ? application : "");
+			snprintf(search->window, sizeof(search->window), "%s",
+				window ? window : "");
+			search->path_len = depth;
+			memcpy(search->path, path, sizeof(int) * (size_t)depth);
+		}
+	}
+	if (depth >= 32) {
+		if (accessible_child_count(node) > 0) search->incomplete = 1;
+		return;
+	}
+	int count = accessible_child_count(node);
+	for (int i = 0; i < count; i++) {
+		if (search->visited >= ACCESSIBILITY_VISITED_LIMIT ||
+		    monotonic_ms() >= search->deadline_ms) {
+			search->incomplete = 1;
+			break;
+		}
+		AtspiAccessible *child = accessible_child(node, i);
+		if (!child) {
+			search->incomplete = 1;
+			break;
+		}
+		path[depth] = i;
+		search_selector_nodes(search, child, application, window,
+			depth + 1, path);
+		g_object_unref(child);
+		if (search->match_count > 1 || search->incomplete) break;
+	}
+}
+
+static void resolve_selector(AccessibilitySearch *search)
+{
+	AtspiAccessible *desktop = prepare_atspi_call()
+		? atspi_get_desktop(0) : NULL;
+	if (!desktop) {
+		search->incomplete = 1;
+		return;
+	}
+	int app_count = accessible_child_count(desktop);
+	for (int i = 0; i < app_count && !search->incomplete &&
+	     search->match_count <= 1; i++) {
+		if (search->visited >= ACCESSIBILITY_VISITED_LIMIT ||
+		    monotonic_ms() >= search->deadline_ms) {
+			search->incomplete = 1;
+			break;
+		}
+		search->visited++;
+		AtspiAccessible *application = accessible_child(desktop, i);
+		if (!application) {
+			search->incomplete = 1;
+			break;
+		}
+		char *application_name = accessible_name(application);
+		if (!application_name) {
+			search->incomplete = 1;
+			g_object_unref(application);
+			break;
+		}
+		if (!scope_matches(application_name,
+		    search->application_filter, search->exact_scope)) {
+			g_free(application_name);
+			g_object_unref(application);
+			continue;
+		}
+		int window_count = accessible_child_count(application);
+		for (int j = 0; j < window_count && !search->incomplete &&
+		     search->match_count <= 1; j++) {
+			if (search->visited >= ACCESSIBILITY_VISITED_LIMIT ||
+			    monotonic_ms() >= search->deadline_ms) {
+				search->incomplete = 1;
+				break;
+			}
+			search->visited++;
+			AtspiAccessible *window = accessible_child(application, j);
+			if (!window) {
+				search->incomplete = 1;
+				break;
+			}
+			char *window_name = accessible_name(window);
+			if (!window_name) {
+				search->incomplete = 1;
+				g_object_unref(window);
+				break;
+			}
+			if (scope_matches(window_name,
+			    search->window_filter, search->exact_scope)) {
+				int path[32] = {0};
+				search_selector_nodes(search, window, application_name,
+					window_name, 0, path);
+			}
+			g_free(window_name);
+			g_object_unref(window);
+		}
+		g_free(application_name);
+		g_object_unref(application);
+	}
+	g_object_unref(desktop);
+}
+
+static void release_search(AccessibilitySearch *search)
+{
+	if (search && search->match) {
+		g_object_unref(search->match);
+		search->match = NULL;
+	}
+}
+
+static int identity_from_search(AccessibilityIdentity *identity,
+	                            const AccessibilitySearch *search)
+{
+	memset(identity, 0, sizeof(*identity));
+	if (!search || !search->match) return -1;
+	AtspiObject *object = ATSPI_OBJECT(search->match);
+	if (!object || !object->path || !object->app || !object->app->bus_name)
+		return -1;
+	identity->bus_name = strdup(object->app->bus_name);
+	identity->object_path = strdup(object->path);
+	identity->process_id = accessible_process_id(search->match);
+	identity->object = g_object_ref(search->match);
+	if (!identity->bus_name || !identity->object_path ||
+	    identity->process_id == 0 || !identity->object) {
+		free(identity->bus_name);
+		free(identity->object_path);
+		if (identity->object) g_object_unref(identity->object);
+		memset(identity, 0, sizeof(*identity));
+		return -1;
+	}
+	return 0;
+}
+
+static int identity_matches_search(const AccessibilityIdentity *identity,
+	                               const AccessibilitySearch *search)
+{
+	if (!identity || !identity->object || !search || !search->match)
+		return 0;
+	AtspiObject *object = ATSPI_OBJECT(search->match);
+	return search->match == identity->object && object && object->path &&
+	       object->app && object->app->bus_name &&
+	       identity->process_id == accessible_process_id(search->match) &&
+	       strcmp(identity->bus_name, object->app->bus_name) == 0 &&
+	       strcmp(identity->object_path, object->path) == 0;
+}
+
+static void clear_identity(AccessibilityIdentity *identity)
+{
+	if (!identity) return;
+	free(identity->bus_name);
+	free(identity->object_path);
+	if (identity->object) g_object_unref(identity->object);
+	memset(identity, 0, sizeof(*identity));
+}
+
+static int node_is_protected(AtspiAccessible *node)
+{
+	int role_known = 0;
+	AtspiRole role = accessible_role_type(node, &role_known);
+	char *role_name = accessible_role(node);
+	AtspiStateSet *states = accessible_state_set(node);
+	int defunct_or_unreadable = !states ||
+		state_contains(states, ATSPI_STATE_DEFUNCT);
+	if (states) g_object_unref(states);
+	int protected = !role_known || role == ATSPI_ROLE_PASSWORD_TEXT ||
+		(role_name && strcasecmp(role_name, "password text") == 0) ||
+		defunct_or_unreadable;
+	g_free(role_name);
+	return protected;
+}
+
+static int selector_state(const char *name, AtspiStateType *state)
+{
+	if (strcmp(name, "focused") == 0) *state = ATSPI_STATE_FOCUSED;
+	else if (strcmp(name, "checked") == 0) *state = ATSPI_STATE_CHECKED;
+	else if (strcmp(name, "selected") == 0) *state = ATSPI_STATE_SELECTED;
+	else if (strcmp(name, "enabled") == 0) *state = ATSPI_STATE_ENABLED;
+	else if (strcmp(name, "editable") == 0) *state = ATSPI_STATE_EDITABLE;
+	else if (strcmp(name, "showing") == 0) *state = ATSPI_STATE_SHOWING;
+	else return -1;
+	return 0;
+}
+
+static cJSON *search_locator(const AccessibilitySearch *search,
+	                         const AccessibilitySelector *selector)
+{
+	cJSON *locator = cJSON_CreateObject();
+	cJSON_AddStringToObject(locator, "application", search->application);
+	cJSON_AddStringToObject(locator, "window", search->window);
+	cJSON_AddStringToObject(locator, "role", selector->role);
+	if (selector->name)
+		cJSON_AddStringToObject(locator, "name", selector->name);
+	cJSON_AddItemToObject(locator, "path",
+		serialize_path(search->path, search->path_len));
+	add_live_identity(locator, search->match);
+	return locator;
+}
+
+static char *action_text(AtspiAccessible *node, int *truncated)
+{
+	if (node_is_protected(node)) return NULL;
+	return read_accessible_text(node, truncated);
+}
+
+static AccessibilityMutation perform_set_text(AtspiAccessible *node,
+	                                           const char *value)
+{
+	AccessibilityMutation outcome = {0};
+	if (!prepare_atspi_call()) return outcome;
+	AtspiEditableText *editable = atspi_accessible_get_editable_text_iface(node);
+	if (!editable) return outcome;
+	GError *error = NULL;
+	if (prepare_atspi_call()) {
+		outcome.issued = 1;
+		outcome.reported_success =
+			atspi_editable_text_set_text_contents(editable, value, &error);
+		outcome.outcome_unknown = error != NULL;
+	}
+	g_object_unref(editable);
+	clear_error(&error);
+	return outcome;
+}
+
+static AccessibilityMutation perform_focus(AtspiAccessible *node)
+{
+	AccessibilityMutation outcome = {0};
+	if (!prepare_atspi_call()) return outcome;
+	AtspiComponent *component = atspi_accessible_get_component_iface(node);
+	if (!component) return outcome;
+	GError *error = NULL;
+	if (prepare_atspi_call()) {
+		outcome.issued = 1;
+		outcome.reported_success = atspi_component_grab_focus(component,
+			&error);
+		outcome.outcome_unknown = error != NULL;
+	}
+	g_object_unref(component);
+	clear_error(&error);
+	return outcome;
+}
+
+static int resolve_action_index_on_iface(AtspiAction *action,
+	                                     const char *action_name,
+	                                     int *action_matches,
+	                                     int *action_index)
+{
+	*action_matches = 0;
+	*action_index = -1;
+	int errors_before = g_query_error_count;
+	if (!action) return -1;
+	GError *error = NULL;
+	int count = prepare_atspi_call()
+		? atspi_action_get_n_actions(action, &error) : 0;
+	clear_error(&error);
+	for (int i = 0; i < count; i++) {
+		if (!prepare_atspi_call()) break;
+		char *name = atspi_action_get_action_name(action, i, &error);
+		clear_error(&error);
+		if (name && strcmp(name, action_name) == 0) {
+			(*action_matches)++;
+			*action_index = i;
+		}
+		g_free(name);
+	}
+	return g_query_error_count == errors_before &&
+	       *action_matches == 1 ? 0 : -1;
+}
+
+static int resolve_action_index(AtspiAccessible *node,
+	                            const char *action_name,
+	                            int *action_matches,
+	                            int *action_index)
+{
+	if (!prepare_atspi_call()) return -1;
+	AtspiAction *action = atspi_accessible_get_action_iface(node);
+	if (!action) return -1;
+	int result = resolve_action_index_on_iface(action, action_name,
+		action_matches, action_index);
+	g_object_unref(action);
+	return result;
+}
+
+static AtspiAction *prepare_invoke(AtspiAccessible *node,
+	                               const char *action_name,
+	                               int *action_matches,
+	                               int *action_index)
+{
+	*action_matches = 0;
+	*action_index = -1;
+	if (!prepare_atspi_call()) return NULL;
+	AtspiAction *action = atspi_accessible_get_action_iface(node);
+	if (!action) return NULL;
+	if (resolve_action_index_on_iface(action, action_name,
+	    action_matches, action_index) != 0) {
+		g_object_unref(action);
+		return NULL;
+	}
+	return action;
+}
+
+static AccessibilityMutation perform_prepared_invoke(AtspiAction *action,
+	                                                   int action_index)
+{
+	AccessibilityMutation outcome = {0};
+	if (!action || action_index < 0) return outcome;
+	GError *error = NULL;
+	if (prepare_atspi_call()) {
+		outcome.issued = 1;
+		outcome.reported_success = atspi_action_do_action(action,
+			action_index, &error);
+		outcome.outcome_unknown = error != NULL;
+	}
+	clear_error(&error);
+	return outcome;
+}
+
+static int node_state(AtspiAccessible *node, AtspiStateType state,
+	                  int *value)
+{
+	AtspiStateSet *states = accessible_state_set(node);
+	if (!states) return -1;
+	if (state_contains(states, ATSPI_STATE_DEFUNCT)) {
+		g_object_unref(states);
+		return -1;
+	}
+	*value = state_contains(states, state);
+	g_object_unref(states);
+	return 0;
+}
+
+static void clear_verification(AccessibilityVerification *verification)
+{
+	if (!verification) return;
+	g_free(verification->text);
+	memset(verification, 0, sizeof(*verification));
+}
+
+static int evaluate_verification(AtspiAccessible *node,
+	                             int verify_text, const char *expected_text,
+	                             int verify_state, AtspiStateType expected_state,
+	                             int expected_state_value,
+	                             AccessibilityVerification *verification)
+{
+	clear_verification(verification);
+	int text_satisfied = !verify_text;
+	int state_satisfied = !verify_state;
+	if (verify_text) {
+		verification->text = action_text(node,
+			&verification->text_truncated);
+		verification->text_observed = verification->text != NULL;
+		if (!verification->text_observed || verification->text_truncated)
+			return -1;
+		text_satisfied = strcmp(verification->text, expected_text) == 0;
+	}
+	if (verify_state) {
+		if (node_state(node, expected_state,
+		    &verification->state_value) != 0)
+			return -1;
+		verification->state_observed = 1;
+		state_satisfied =
+			verification->state_value == expected_state_value;
+	}
+	verification->satisfied = text_satisfied && state_satisfied;
+	return 0;
 }
 
 static void search_focused(FocusSearch *search,
@@ -1016,5 +1541,581 @@ cJSON *accessibility_focused_element(const char *application_filter,
 	(void)window_filter;
 #endif
 	end_query();
+	return result;
+}
+
+cJSON *accessibility_action(const cJSON *params)
+{
+	reset_query_errors();
+	cJSON *result = accessibility_status_base();
+	cJSON_AddBoolToObject(result, "success", 0);
+	cJSON_AddBoolToObject(result, "actionApplied", 0);
+	cJSON_AddBoolToObject(result, "verified", 0);
+	cJSON_AddBoolToObject(result, "mutationIssued", 0);
+	cJSON_AddBoolToObject(result, "actionOutcomeUnknown", 0);
+	cJSON_AddStringToObject(result, "actionOutcome", "not_issued");
+	if (!g_accessibility_available) {
+		cJSON_AddStringToObject(result, "errorCode", "backend_unavailable");
+		cJSON_AddStringToObject(result, "error", "AT-SPI accessibility backend is unavailable");
+		return result;
+	}
+
+#ifdef HAVE_ATSPI
+	const cJSON *application_item = cJSON_GetObjectItem(params, "application");
+	const char *application = application_item ? application_item->valuestring : NULL;
+	const cJSON *window_item = cJSON_GetObjectItem(params, "window");
+	const char *window = window_item ? window_item->valuestring : NULL;
+	const char *operation = cJSON_GetObjectItem(params, "operation")->valuestring;
+	const cJSON *target_object = cJSON_GetObjectItem(params, "target");
+	const cJSON *verify_object = cJSON_GetObjectItem(params, "verify");
+	const cJSON *timeout_item = cJSON_GetObjectItem(params, "timeoutMs");
+	int timeout_ms = timeout_item ? timeout_item->valueint : 1000;
+	long long started_ms = monotonic_ms();
+	long long deadline_ms = started_ms + timeout_ms;
+	cJSON_AddStringToObject(result, "operation", operation);
+	cJSON_AddNumberToObject(result, "timeoutMs", timeout_ms);
+
+	AccessibilitySelector target_selector;
+	if (parse_selector(target_object, &target_selector) != 0) {
+		cJSON_AddStringToObject(result, "errorCode", "invalid_selector");
+		cJSON_AddStringToObject(result, "error", "Target selector must include role and name or path");
+		return result;
+	}
+
+	AccessibilitySelector verify_selector;
+	memset(&verify_selector, 0, sizeof(verify_selector));
+	const char *expected_text = NULL;
+	const char *expected_state_name = NULL;
+	int expected_state_value = 0;
+	AtspiStateType expected_state = ATSPI_STATE_INVALID;
+	int verify_text = 0;
+	int verify_state = 0;
+	AccessibilityIdentity target_identity = {0};
+	AccessibilityIdentity verify_identity = {0};
+	AtspiAction *prepared_action = NULL;
+	int prepared_action_index = -1;
+	if (strcmp(operation, "invoke") == 0) {
+		if (parse_selector(verify_object, &verify_selector) != 0) {
+			cJSON_AddStringToObject(result, "errorCode", "verification_required");
+			cJSON_AddStringToObject(result, "error", "Invoke requires a verification selector and postcondition");
+			return result;
+		}
+		const cJSON *text_equals = cJSON_GetObjectItem(verify_object, "textEquals");
+		const cJSON *state = cJSON_GetObjectItem(verify_object, "state");
+		if (text_equals) {
+			expected_text = text_equals->valuestring;
+			verify_text = 1;
+		}
+		if (state) {
+			expected_state_name = state->valuestring;
+			selector_state(expected_state_name, &expected_state);
+			expected_state_value = cJSON_IsTrue(
+				cJSON_GetObjectItem(verify_object, "stateValue"));
+			verify_state = 1;
+		}
+	} else {
+		verify_selector = target_selector;
+		if (strcmp(operation, "setText") == 0) {
+			expected_text = cJSON_GetObjectItem(params, "value")->valuestring;
+			verify_text = 1;
+		} else {
+			expected_state_name = "focused";
+			expected_state = ATSPI_STATE_FOCUSED;
+			expected_state_value = 1;
+			verify_state = 1;
+		}
+	}
+
+	begin_query(deadline_ms);
+	AccessibilitySearch target_search = {
+		.application_filter = application,
+		.window_filter = window,
+		.selector = &target_selector,
+		.exact_scope = 1,
+		.deadline_ms = deadline_ms,
+	};
+	resolve_selector(&target_search);
+	cJSON_AddNumberToObject(result, "targetMatchCount", target_search.match_count);
+	cJSON_AddBoolToObject(result, "targetMatchCountExact",
+		!target_search.incomplete && g_query_error_count == 0 &&
+		target_search.match_count <= 1);
+	if (target_search.incomplete || g_query_error_count > 0 ||
+	    target_search.match_count != 1 || !target_search.match) {
+		cJSON_AddStringToObject(result, "errorCode",
+			target_search.match_count > 1 ? "target_ambiguous" :
+			target_search.incomplete || g_query_error_count > 0
+				? "target_incomplete" : "target_not_found");
+		cJSON_AddStringToObject(result, "error",
+			target_search.match_count > 1 ? "Target selector matched multiple elements" :
+			"Target selector did not resolve completely to one element");
+		release_search(&target_search);
+		goto action_done;
+	}
+	if (node_is_protected(target_search.match)) {
+		cJSON_AddStringToObject(result, "errorCode", "protected_target");
+		cJSON_AddStringToObject(result, "error", "Protected or unknown-role elements cannot be mutated");
+		release_search(&target_search);
+		goto action_done;
+	}
+	cJSON_AddItemToObject(result, "target",
+		search_locator(&target_search, &target_selector));
+	if (identity_from_search(&target_identity, &target_search) != 0) {
+		cJSON_AddStringToObject(result, "errorCode", "target_identity_unavailable");
+		cJSON_AddStringToObject(result, "error",
+			"Could not bind target to one live AT-SPI object");
+		release_search(&target_search);
+		goto action_done;
+	}
+
+	int enabled = 0;
+	int showing = 0;
+	int focusable = 0;
+	int editable = 0;
+	if (node_state(target_search.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
+	    node_state(target_search.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
+	    node_state(target_search.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
+	    node_state(target_search.match, ATSPI_STATE_EDITABLE, &editable) != 0) {
+		cJSON_AddStringToObject(result, "errorCode", "precondition_incomplete");
+		cJSON_AddStringToObject(result, "error", "Could not read target preconditions");
+		release_search(&target_search);
+		goto action_done;
+	}
+	cJSON *precondition = cJSON_CreateObject();
+	cJSON_AddBoolToObject(precondition, "enabled", enabled);
+	cJSON_AddBoolToObject(precondition, "showing", showing);
+	cJSON_AddBoolToObject(precondition, "focusable", focusable);
+	cJSON_AddBoolToObject(precondition, "editable", editable);
+	cJSON_AddItemToObject(result, "precondition", precondition);
+	if (!enabled || !showing ||
+	    (strcmp(operation, "focus") == 0 && !focusable) ||
+	    (strcmp(operation, "setText") == 0 && !editable)) {
+		cJSON_AddStringToObject(result, "errorCode", "precondition_failed");
+		cJSON_AddStringToObject(result, "error", "Target is not enabled/showing or lacks the required state");
+		release_search(&target_search);
+		goto action_done;
+	}
+
+	AccessibilitySearch verify_pre = {
+		.application_filter = application,
+		.window_filter = window,
+		.selector = &verify_selector,
+		.exact_scope = 1,
+		.deadline_ms = deadline_ms,
+	};
+	resolve_selector(&verify_pre);
+	if (verify_pre.incomplete || g_query_error_count > 0 ||
+	    verify_pre.match_count != 1 || !verify_pre.match ||
+	    node_is_protected(verify_pre.match)) {
+		cJSON_AddStringToObject(result, "errorCode", "verification_unresolved");
+		cJSON_AddStringToObject(result, "error", "Verification selector did not resolve safely to one element");
+		release_search(&verify_pre);
+		release_search(&target_search);
+		goto action_done;
+	}
+	if (identity_from_search(&verify_identity, &verify_pre) != 0) {
+		cJSON_AddStringToObject(result, "errorCode", "verification_identity_unavailable");
+		cJSON_AddStringToObject(result, "error",
+			"Could not bind verification to one live AT-SPI object");
+		release_search(&verify_pre);
+		release_search(&target_search);
+		clear_identity(&target_identity);
+		goto action_done;
+	}
+	cJSON *verification = cJSON_CreateObject();
+	cJSON_AddItemToObject(verification, "target",
+		search_locator(&verify_pre, &verify_selector));
+	if (verify_text)
+		cJSON_AddStringToObject(verification, "expectedText", expected_text);
+	if (verify_state) {
+		cJSON_AddStringToObject(verification, "expectedState", expected_state_name);
+		cJSON_AddBoolToObject(verification, "expectedStateValue", expected_state_value);
+	}
+	AccessibilityVerification before = {0};
+	if (evaluate_verification(verify_pre.match,
+	    verify_text, expected_text, verify_state, expected_state,
+	    expected_state_value, &before) != 0 || g_query_error_count > 0) {
+		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
+		cJSON_AddStringToObject(result, "error",
+			"Verification postcondition could not be read exactly before mutation");
+		clear_verification(&before);
+		release_search(&verify_pre);
+		release_search(&target_search);
+		goto action_done;
+	}
+	if (before.text_observed)
+		cJSON_AddBoolToObject(verification, "beforeTextObserved", 1);
+	if (before.state_observed)
+		cJSON_AddBoolToObject(verification, "beforeStateValue",
+			before.state_value);
+	cJSON_AddBoolToObject(verification, "alreadySatisfied", before.satisfied);
+	cJSON_AddItemToObject(result, "verification", verification);
+	release_search(&verify_pre);
+	int preflight_action_index = -1;
+	int preflight_action_matches = 0;
+	if (strcmp(operation, "invoke") == 0) {
+		const char *action_name = cJSON_GetObjectItem(params, "action")->valuestring;
+		if (resolve_action_index(target_search.match, action_name,
+		    &preflight_action_matches, &preflight_action_index) != 0) {
+			cJSON_AddStringToObject(result, "errorCode",
+				preflight_action_matches > 1 ? "action_ambiguous" :
+				"action_not_found");
+			cJSON_AddStringToObject(result, "error",
+				"Named action could not be resolved completely and uniquely");
+			cJSON_AddStringToObject(result, "action", action_name);
+			cJSON_AddNumberToObject(result, "actionMatchCount",
+				preflight_action_matches);
+			clear_verification(&before);
+			release_search(&target_search);
+			clear_identity(&target_identity);
+			clear_identity(&verify_identity);
+			goto action_done;
+		}
+	}
+	if (before.satisfied) {
+		cJSON_ReplaceItemInObject(result, "verified", cJSON_CreateBool(1));
+		cJSON_ReplaceItemInObject(result, "success", cJSON_CreateBool(1));
+		cJSON_AddNumberToObject(result, "pollCount", 0);
+		cJSON_AddBoolToObject(verification, "satisfied", 1);
+		if (before.text_observed)
+			cJSON_AddBoolToObject(verification, "actualTextObserved", 1);
+		if (before.state_observed)
+			cJSON_AddBoolToObject(verification, "actualStateValue",
+				before.state_value);
+		clear_verification(&before);
+		release_search(&target_search);
+		clear_identity(&target_identity);
+		clear_identity(&verify_identity);
+		goto action_done;
+	}
+	clear_verification(&before);
+
+	AccessibilitySearch target_before_action = {
+		.application_filter = application,
+		.window_filter = window,
+		.selector = &target_selector,
+		.exact_scope = 1,
+		.deadline_ms = deadline_ms,
+	};
+	resolve_selector(&target_before_action);
+	if (target_before_action.incomplete || g_query_error_count > 0 ||
+	    target_before_action.match_count != 1 ||
+	    !target_before_action.match ||
+	    !identity_matches_search(&target_identity, &target_before_action) ||
+	    node_is_protected(target_before_action.match)) {
+		cJSON_AddStringToObject(result, "errorCode", "target_changed");
+		cJSON_AddStringToObject(result, "error",
+			"Target identity changed or became unsafe before mutation");
+		release_search(&target_before_action);
+		release_search(&target_search);
+		goto action_done;
+	}
+	release_search(&target_search);
+	target_search = target_before_action;
+
+	enabled = showing = focusable = editable = 0;
+	if (node_state(target_search.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
+	    node_state(target_search.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
+	    node_state(target_search.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
+	    node_state(target_search.match, ATSPI_STATE_EDITABLE, &editable) != 0 ||
+	    !enabled || !showing ||
+	    (strcmp(operation, "focus") == 0 && !focusable) ||
+	    (strcmp(operation, "setText") == 0 && !editable)) {
+		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
+		cJSON_AddStringToObject(result, "error",
+			"Target preconditions changed before mutation");
+		release_search(&target_search);
+		goto action_done;
+	}
+
+	AccessibilitySearch verify_before_action = {
+		.application_filter = application,
+		.window_filter = window,
+		.selector = &verify_selector,
+		.exact_scope = 1,
+		.deadline_ms = deadline_ms,
+	};
+	resolve_selector(&verify_before_action);
+	if (verify_before_action.incomplete || g_query_error_count > 0 ||
+	    verify_before_action.match_count != 1 ||
+	    !verify_before_action.match ||
+	    !identity_matches_search(&verify_identity, &verify_before_action) ||
+	    node_is_protected(verify_before_action.match)) {
+		cJSON_AddStringToObject(result, "errorCode", "verification_changed");
+		cJSON_AddStringToObject(result, "error",
+			"Verification identity changed or became unreadable before mutation");
+		release_search(&verify_before_action);
+		release_search(&target_search);
+		goto action_done;
+	}
+	AccessibilityVerification immediate = {0};
+	if (evaluate_verification(verify_before_action.match,
+	    verify_text, expected_text, verify_state, expected_state,
+	    expected_state_value, &immediate) != 0 || g_query_error_count > 0) {
+		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
+		cJSON_AddStringToObject(result, "error",
+			"Verification postcondition could not be read immediately before mutation");
+		clear_verification(&immediate);
+		release_search(&verify_before_action);
+		release_search(&target_search);
+		goto action_done;
+	}
+	release_search(&verify_before_action);
+	if (immediate.satisfied) {
+		cJSON_ReplaceItemInObject(result, "verified", cJSON_CreateBool(1));
+		cJSON_ReplaceItemInObject(result, "success", cJSON_CreateBool(1));
+		cJSON_AddNumberToObject(result, "pollCount", 0);
+		cJSON_ReplaceItemInObject(verification, "alreadySatisfied",
+			cJSON_CreateBool(1));
+		cJSON_AddBoolToObject(verification, "satisfied", 1);
+		if (immediate.text_observed)
+			cJSON_AddBoolToObject(verification, "actualTextObserved", 1);
+		if (immediate.state_observed)
+			cJSON_AddBoolToObject(verification, "actualStateValue",
+				immediate.state_value);
+		clear_verification(&immediate);
+		release_search(&target_search);
+		goto action_done;
+	}
+	clear_verification(&immediate);
+	int verification_was_readable = 1;
+
+	AccessibilitySearch target_dispatch = {
+		.application_filter = application,
+		.window_filter = window,
+		.selector = &target_selector,
+		.exact_scope = 1,
+		.deadline_ms = deadline_ms,
+	};
+	resolve_selector(&target_dispatch);
+	if (target_dispatch.incomplete || g_query_error_count > 0 ||
+	    target_dispatch.match_count != 1 || !target_dispatch.match ||
+	    !identity_matches_search(&target_identity, &target_dispatch) ||
+	    node_is_protected(target_dispatch.match)) {
+		cJSON_AddStringToObject(result, "errorCode", "target_changed");
+		cJSON_AddStringToObject(result, "error",
+			"Target identity changed or became unsafe immediately before mutation");
+		release_search(&target_dispatch);
+		release_search(&target_search);
+		goto action_done;
+	}
+	enabled = showing = focusable = editable = 0;
+	if (node_state(target_dispatch.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
+	    node_state(target_dispatch.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
+	    node_state(target_dispatch.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
+	    node_state(target_dispatch.match, ATSPI_STATE_EDITABLE, &editable) != 0 ||
+	    !enabled || !showing ||
+	    (strcmp(operation, "focus") == 0 && !focusable) ||
+	    (strcmp(operation, "setText") == 0 && !editable)) {
+		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
+		cJSON_AddStringToObject(result, "error",
+			"Target preconditions changed immediately before mutation");
+		release_search(&target_dispatch);
+		release_search(&target_search);
+		goto action_done;
+	}
+	release_search(&target_search);
+	target_search = target_dispatch;
+
+	int final_action_matches = 0;
+	const char *action_name = NULL;
+	if (strcmp(operation, "invoke") == 0) {
+		action_name = cJSON_GetObjectItem(params, "action")->valuestring;
+		prepared_action = prepare_invoke(target_search.match, action_name,
+			&final_action_matches, &prepared_action_index);
+		cJSON_AddStringToObject(result, "action", action_name);
+		cJSON_AddNumberToObject(result, "actionMatchCount", final_action_matches);
+		if (!prepared_action) {
+			cJSON_AddStringToObject(result, "errorCode",
+				final_action_matches > 1 ? "action_ambiguous" :
+				"action_not_found");
+			cJSON_AddStringToObject(result, "error",
+				"Named action changed or could not be resolved completely before mutation");
+			release_search(&target_search);
+			goto action_done;
+		}
+	}
+
+	AccessibilitySearch verify_dispatch = {
+		.application_filter = application,
+		.window_filter = window,
+		.selector = &verify_selector,
+		.exact_scope = 1,
+		.deadline_ms = deadline_ms,
+	};
+	resolve_selector(&verify_dispatch);
+	if (verify_dispatch.incomplete || g_query_error_count > 0 ||
+	    verify_dispatch.match_count != 1 || !verify_dispatch.match ||
+	    !identity_matches_search(&verify_identity, &verify_dispatch) ||
+	    node_is_protected(verify_dispatch.match)) {
+		cJSON_AddStringToObject(result, "errorCode", "verification_changed");
+		cJSON_AddStringToObject(result, "error",
+			"Verification identity changed or became unreadable immediately before mutation");
+		release_search(&verify_dispatch);
+		release_search(&target_search);
+		goto action_done;
+	}
+	AccessibilityVerification dispatch_verification = {0};
+	if (evaluate_verification(verify_dispatch.match,
+	    verify_text, expected_text, verify_state, expected_state,
+	    expected_state_value, &dispatch_verification) != 0 ||
+	    g_query_error_count > 0) {
+		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
+		cJSON_AddStringToObject(result, "error",
+			"Verification postcondition could not be read at dispatch");
+		clear_verification(&dispatch_verification);
+		release_search(&verify_dispatch);
+		release_search(&target_search);
+		goto action_done;
+	}
+	release_search(&verify_dispatch);
+	if (dispatch_verification.satisfied) {
+		cJSON_ReplaceItemInObject(result, "verified", cJSON_CreateBool(1));
+		cJSON_ReplaceItemInObject(result, "success", cJSON_CreateBool(1));
+		cJSON_AddNumberToObject(result, "pollCount", 0);
+		cJSON_ReplaceItemInObject(verification, "alreadySatisfied",
+			cJSON_CreateBool(1));
+		cJSON_AddBoolToObject(verification, "satisfied", 1);
+		if (dispatch_verification.text_observed)
+			cJSON_AddBoolToObject(verification, "actualTextObserved", 1);
+		if (dispatch_verification.state_observed)
+			cJSON_AddBoolToObject(verification, "actualStateValue",
+				dispatch_verification.state_value);
+		clear_verification(&dispatch_verification);
+		release_search(&target_search);
+		goto action_done;
+	}
+	clear_verification(&dispatch_verification);
+
+	AccessibilityMutation mutation = {0};
+	if (strcmp(operation, "setText") == 0) {
+		mutation = perform_set_text(target_search.match, expected_text);
+	} else if (strcmp(operation, "focus") == 0) {
+		mutation = perform_focus(target_search.match);
+	} else {
+		mutation = perform_prepared_invoke(prepared_action,
+			prepared_action_index);
+	}
+	release_search(&target_search);
+	cJSON_ReplaceItemInObject(result, "mutationIssued",
+		cJSON_CreateBool(mutation.issued));
+	cJSON_ReplaceItemInObject(result, "actionApplied",
+		cJSON_CreateBool(mutation.reported_success));
+	cJSON_ReplaceItemInObject(result, "actionOutcomeUnknown",
+		cJSON_CreateBool(mutation.outcome_unknown));
+	cJSON_ReplaceItemInObject(result, "actionOutcome", cJSON_CreateString(
+		!mutation.issued ? "not_issued" :
+		mutation.outcome_unknown ? "unknown" :
+		mutation.reported_success ? "reported_applied" : "reported_failed"));
+	if (!mutation.issued) {
+		if (!cJSON_GetObjectItem(result, "errorCode")) {
+			cJSON_AddStringToObject(result, "errorCode", "action_not_issued");
+			cJSON_AddStringToObject(result, "error",
+				"AT-SPI mutation could not be issued before the deadline");
+		}
+		goto action_done;
+	}
+
+	int polls = 0;
+	int verified = 0;
+	int verification_incomplete = 0;
+	AccessibilityVerification observed = {0};
+	int verification_error_base = g_query_error_count;
+	while (monotonic_ms() < deadline_ms) {
+		AccessibilitySearch post = {
+			.application_filter = application,
+			.window_filter = window,
+			.selector = &verify_selector,
+			.exact_scope = 1,
+			.deadline_ms = deadline_ms,
+		};
+		resolve_selector(&post);
+		polls++;
+		if (post.match_count > 1 ||
+		    (post.match_count == 1 &&
+		     (!identity_matches_search(&verify_identity, &post) ||
+		      node_is_protected(post.match)))) {
+			verification_incomplete = 1;
+			release_search(&post);
+			break;
+		}
+		int new_query_error = g_query_error_count > verification_error_base;
+		if (post.incomplete && !new_query_error) {
+			if (monotonic_ms() < deadline_ms ||
+			    !verification_was_readable)
+				verification_incomplete = 1;
+			release_search(&post);
+			break;
+		}
+		if (new_query_error) {
+			verification_error_base = g_query_error_count;
+			release_search(&post);
+			long long retry_remaining = deadline_ms - monotonic_ms();
+			if (retry_remaining <= 0) {
+				if (!verification_was_readable)
+					verification_incomplete = 1;
+				break;
+			}
+			int retry_sleep = retry_remaining < 10
+				? (int)retry_remaining : 10;
+			if (retry_sleep > 0)
+				usleep((useconds_t)retry_sleep * 1000U);
+			continue;
+		}
+		if (post.match_count == 1 && post.match) {
+			if (evaluate_verification(post.match,
+			    verify_text, expected_text, verify_state, expected_state,
+			    expected_state_value, &observed) != 0) {
+				verification_incomplete = 1;
+				release_search(&post);
+				break;
+			}
+			verified = observed.satisfied;
+			verification_was_readable = 1;
+		}
+		release_search(&post);
+		if (verified) break;
+		long long remaining_ms = deadline_ms - monotonic_ms();
+		if (remaining_ms <= 0) break;
+		int sleep_ms = remaining_ms < 10 ? (int)remaining_ms : 10;
+		if (sleep_ms > 0) usleep((useconds_t)sleep_ms * 1000U);
+	}
+	if (observed.text_observed)
+		cJSON_AddBoolToObject(verification, "actualTextObserved", 1);
+	if (observed.state_observed)
+		cJSON_AddBoolToObject(verification, "actualStateValue",
+			observed.state_value);
+	if (!verified && g_query_timed_out &&
+	    verification_was_readable)
+		verification_incomplete = 0;
+	cJSON_AddBoolToObject(verification, "satisfied", verified);
+	cJSON_AddNumberToObject(result, "pollCount", polls);
+	cJSON_ReplaceItemInObject(result, "verified", cJSON_CreateBool(verified));
+	cJSON_ReplaceItemInObject(result, "success", cJSON_CreateBool(verified));
+	if (!verified) {
+		cJSON_AddStringToObject(result, "errorCode",
+			mutation.outcome_unknown ? "action_outcome_unknown" :
+			verification_incomplete ? "verification_incomplete" :
+			"verification_failed");
+		cJSON_AddStringToObject(result, "error",
+			mutation.outcome_unknown
+				? "Mutation outcome is unknown and the postcondition was not verified; do not retry blindly"
+				: "Action was issued but the postcondition was not verified before timeout");
+	}
+	clear_verification(&observed);
+
+action_done:
+	if (prepared_action) g_object_unref(prepared_action);
+	clear_identity(&target_identity);
+	clear_identity(&verify_identity);
+	cJSON_AddNumberToObject(result, "queryErrorCount", g_query_error_count);
+	if (g_query_error_count > 0)
+		cJSON_AddStringToObject(result, "lastError", g_last_query_error);
+	cJSON_AddNumberToObject(result, "elapsedMs", monotonic_ms() - started_ms);
+	end_query();
+#else
+	(void)params;
+	cJSON_AddStringToObject(result, "errorCode", "backend_unavailable");
+	cJSON_AddStringToObject(result, "error", "AT-SPI accessibility support was not compiled");
+#endif
 	return result;
 }

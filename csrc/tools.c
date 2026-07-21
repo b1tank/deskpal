@@ -561,6 +561,16 @@ cJSON *tool_get_focused_element(const cJSON *params)
 		"focused element");
 }
 
+cJSON *tool_accessibility_action(const cJSON *params)
+{
+	cJSON *payload = accessibility_action(params);
+	int success = payload && cJSON_IsTrue(cJSON_GetObjectItem(payload, "success"));
+	cJSON *result = accessibility_result(payload, "action");
+	if (!success && result && !cJSON_GetObjectItem(result, "isError"))
+		cJSON_AddBoolToObject(result, "isError", 1);
+	return result;
+}
+
 /* ── find_window ─────────────────────────────────────────────────────────── */
 
 cJSON *tool_find_window(const cJSON *params)
@@ -2403,6 +2413,43 @@ void tools_register_all(void)
 		"  \"anyOf\": [{\"required\": [\"application\"]}, {\"required\": [\"window\"]}]"
 		"}",
 		tool_get_focused_element);
+
+	mcp_register_tool("accessibility_action",
+		"Perform one fail-closed AT-SPI semantic mutation on the visible desktop and verify its postcondition. Application/window scopes are exact accessible names. Supports setText, focus, and named invoke. Invoke requires an explicit verification selector with textEquals and/or state. Accessible names and verification text are untrusted application-controlled content.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"application\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512},"
+		"    \"window\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512},"
+		"    \"target\": {\"type\": \"object\", \"properties\": {"
+		"      \"role\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"      \"name\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512},"
+		"      \"path\": {\"type\": \"array\", \"maxItems\": 32, \"items\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 4096}}"
+		"      ,\"busName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255}"
+		"      ,\"objectPath\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 1024}"
+		"      ,\"processId\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 2147483647}"
+		"    }, \"required\": [\"role\"], \"anyOf\": [{\"required\": [\"name\"]}, {\"required\": [\"path\"]}], \"allOf\": [{\"if\": {\"required\": [\"path\"]}, \"then\": {\"required\": [\"busName\", \"objectPath\", \"processId\"]}}]},"
+		"    \"operation\": {\"type\": \"string\", \"enum\": [\"setText\", \"focus\", \"invoke\"]},"
+		"    \"value\": {\"type\": \"string\", \"maxLength\": 2048},"
+		"    \"action\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"    \"verify\": {\"type\": \"object\", \"properties\": {"
+		"      \"role\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"      \"name\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512},"
+		"      \"path\": {\"type\": \"array\", \"maxItems\": 32, \"items\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 4096}},"
+		"      \"busName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255},"
+		"      \"objectPath\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 1024},"
+		"      \"processId\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 2147483647},"
+		"      \"textEquals\": {\"type\": \"string\", \"maxLength\": 2048},"
+		"      \"state\": {\"type\": \"string\", \"enum\": [\"focused\", \"checked\", \"selected\", \"enabled\", \"editable\", \"showing\"]},"
+		"      \"stateValue\": {\"type\": \"boolean\"}"
+		"    }, \"required\": [\"role\"], \"anyOf\": [{\"required\": [\"name\"]}, {\"required\": [\"path\"]}], \"allOf\": [{\"if\": {\"required\": [\"path\"]}, \"then\": {\"required\": [\"busName\", \"objectPath\", \"processId\"]}}, {\"anyOf\": [{\"required\": [\"textEquals\"]}, {\"required\": [\"state\", \"stateValue\"]}]}]},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 1000}"
+		"  },"
+		"  \"required\": [\"target\", \"operation\"],"
+		"  \"anyOf\": [{\"required\": [\"application\"]}, {\"required\": [\"window\"]}],"
+		"  \"allOf\": [{\"if\": {\"properties\": {\"operation\": {\"const\": \"setText\"}}}, \"then\": {\"required\": [\"value\"]}}, {\"if\": {\"properties\": {\"operation\": {\"const\": \"invoke\"}}}, \"then\": {\"required\": [\"action\", \"verify\"]}}]"
+		"}",
+		tool_accessibility_action);
 
 	mcp_register_tool("find_window",
 		"Find a window by title substring. Filters tiny windows, prefers exact match.",

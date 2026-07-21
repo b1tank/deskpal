@@ -122,7 +122,7 @@ def tool_by_name(tools, name):
 def start_xvfb(temp_dir, screen_size="1280x800"):
     display_number = next(
         number
-        for number in range(190, 230)
+        for number in range(190, 350)
         if not os.path.exists(f"/tmp/.X11-unix/X{number}")
     )
     display = f":{display_number}"

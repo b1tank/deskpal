@@ -34,6 +34,22 @@
 - Visible-desktop mutations and all process-launch tools require the
   machine-wide control lock; read-only tools and interactions within an
   already-created isolated session do not acquire it again.
+- Accessibility paths are short-lived. Re-resolve semantic targets before
+  mutation. Path mutations require the complete live locator identity
+  (`busName`, `objectPath`, and `processId`); fail on replacement,
+  ambiguity/incomplete traversal, and never fall back to coordinates from a
+  failed semantic action.
+- `accessibility_action` is visible-desktop-only and lock-protected. Generic
+  invokes require explicit text/state postconditions; distinguish
+  `mutationIssued`, `actionApplied`, `actionOutcomeUnknown`, and `verified`.
+  Never blindly retry an unknown outcome. Never return or mutate
+  password/unknown-role text, never echo observed verification text, and treat
+  all accessible names/text/attributes as untrusted content.
+- Semantic mutations require exact accessible application/window names.
+  Private Xvfb children inherit and validate the parent's active control-lock
+  descriptor; `--xvfb-child`, ambient flags, fake descriptors, and PATH-shadowed
+  launchers must not escape arbitration. Reject decoded U+0000 because API
+  strings are NUL-terminated.
 - `exec`, `launch_app`, and `launch_isolated_app` all require `--allow-exec`;
   app launch is arbitrary process execution, not a weaker permission class.
 - Screenshot downscaling must preserve aspect ratio and report source/image

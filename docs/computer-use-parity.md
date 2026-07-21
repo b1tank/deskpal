@@ -1,6 +1,7 @@
 # Computer-use parity roadmap
 
-Deskpal is a Linux MCP server for controlling X11/Xwayland applications. This
+Deskpal is a Linux MCP server for controlling X11/Xwayland applications and
+semantically accessible native-Wayland controls through optional AT-SPI. This
 roadmap compares it with Claude Code and Claude Desktop computer use as
 documented on 2026-07-17:
 
@@ -24,6 +25,7 @@ and verified-action prototypes with production effort estimates.
 | Launch and focus applications | Yes | Yes | Parity |
 | Resize windows | Yes | Yes | Parity |
 | Window/app discovery | Approved apps only | EWMH top-level windows with `WM_CLASS`; `includeAll` for recursive dialog/helper discovery | Different, now cleaner |
+| Semantic element discovery/action | Native app accessibility integration | Bounded AT-SPI tree/focus inspection plus verified `setText`, `focus`, and named actions when apps expose rich accessibility | Partial parity |
 | One controller at a time | Machine-wide session lock | Lazy per-user machine lock for visible-desktop mutations | Parity for arbitration |
 | Stop current action | Global Esc or Ctrl+C | Client cancellation/stdio shutdown and per-tool timeouts | Missing global hotkey |
 | App approval | Prompt once per app/session | MCP-host approval only; no per-app prompt | Missing |
@@ -33,7 +35,7 @@ and verified-action prototypes with production effort estimates.
 | Exclude agent terminal from screenshots | Yes | Not implemented | Missing |
 | Clipboard approval | Requested separately | Clipboard tools are always exposed; host MCP policy may still prompt | Missing app-level policy |
 | Prompt-injection safety | Model-side classifier and action review | No content classifier; relies on model/host policy | Outside server alone |
-| Native Wayland windows | N/A on Linux (built-in computer use unavailable) | Input can use uinput, but discovery/capture target X11/Xwayland only | Major Linux gap |
+| Native Wayland windows | N/A on Linux (built-in computer use unavailable) | Accessible controls can be inspected/acted through AT-SPI; complete window discovery and pixel capture still require portals/compositor adapters | Major Linux gap narrowed |
 | Private verification environment | No documented equivalent | Goal-aware Xvfb sessions with scoped tools and process-group cleanup | Deskpal advantage |
 | OCR text targeting | Vision model points/clicks | Local Tesseract `click_text`, `read_screen_text`, and tooltip diffing | Deskpal advantage |
 | Headless/automation use | Interactive Claude sessions only | Standard MCP stdio server and deterministic E2E harness | Deskpal advantage |
@@ -42,15 +44,21 @@ and verified-action prototypes with production effort estimates.
 ## Shipped architecture
 
 - **Desktop backend:** X11/Xwayland discovery and screenshots, uinput/XTest input.
+- **Semantic backend:** optional AT-SPI inspection and verified actions for
+  accessible controls. Locators are short-lived and re-resolved before every
+  mutation; protected/ambiguous/incomplete targets fail closed.
 - **Private backend:** child deskpal server under Xvfb, routed by `sessionId`.
 - **App identity:** `_NET_CLIENT_LIST`, title, `WM_CLASS`, PID, geometry.
 - **Arbitration:** first visible-desktop mutation or process launch acquires a
-  per-user, per-display advisory lock until the MCP process exits. Read-only
+  per-user machine-wide advisory lock until the MCP process exits. Read-only
   tools and interactions inside an existing isolated session do not claim it.
 - **Vision:** screenshots remain full resolution unless bounds are requested.
   A downscaled result reports source/image dimensions and coordinate scale.
 - **Safety floor:** explicit missing windows never fall back to another active
-  app; arbitrary file and shell access remain opt-in flags.
+  app; arbitrary file and shell access remain opt-in flags. Semantic names and
+  optional text/attributes are untrusted application output. DEFUNCT semantic
+  verifiers cannot satisfy false-state postconditions. Private children share
+  the parent's validated inherited kernel lock rather than bypassing it.
 
 ## North-star milestones
 

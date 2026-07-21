@@ -22,5 +22,6 @@ cJSON *accessibility_tree(const char *application_filter,
 cJSON *accessibility_focused_element(const char *application_filter,
                                      const char *window_filter,
                                      int include_text);
+cJSON *accessibility_action(const cJSON *params);
 
 #endif /* DESKPAL_ACCESSIBILITY_H */

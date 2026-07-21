@@ -20,9 +20,18 @@ the user's visible desktop:
 - `e2e_accessibility.py`: optional AT-SPI tool schemas, unavailable capability,
   bounded semantic tree output, filtering/truncation, logical bounds, actions,
   opt-in attributes/text, privacy redaction, completion metadata, and true
-  focused-element lookup. Semantic coverage runs inside
+  focused-element lookup. It also covers verified semantic text/focus/invoke
+  mutations, path and role/name resolution, ambiguity, verification timeout,
+  unknown outcomes, same-path/interleaving replacement, DEFUNCT verifier
+  rejection, lock contention, protected roles, and isolated-session rejection. Semantic
+  coverage runs inside
   private Xvfb and D-Bus/AT-SPI sessions and does not change host accessibility
   settings.
+
+`e2e_isolation.py` also proves that direct `--xvfb-child`, ambient headless
+markers, fake inherited descriptors, and PATH-shadowed `xvfb-run` cannot forge
+private control ownership. Real children inherit the parent's locked file
+description and validate it before serving tools.
 
 All suites use `deskpal_client.py`. New protocol tests should use this client
 instead of copying JSON-RPC transport code.

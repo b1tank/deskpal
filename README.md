@@ -15,6 +15,7 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 | `accessibility_status` | Cheaply report whether the optional AT-SPI backend is compiled and connected |
 | `get_accessibility_tree` | Return a scoped, bounded semantic tree with roles, names, states, logical bounds, actions, optional attributes/text, and short-lived locators |
 | `get_focused_element` | Return the true focused AT-SPI child within a required application/window scope; ambiguous results fail closed |
+| `accessibility_action` | Perform verified semantic `setText`, `focus`, or named `invoke` on one uniquely resolved accessible element |
 | `find_window` | Find a window by title substring |
 | `focus_window` | Bring a window to front and give it input focus |
 | `click` | Click at (x, y) relative to a window. Supports left/right/middle buttons |
@@ -75,7 +76,27 @@ descendants. Accessibility paths are short-lived tree locations, not permanent
 element IDs; re-query before relying on them. Accessible names, optional
 attributes, and optional text are application-controlled, potentially private
 or adversarial content. Text and attributes are omitted unless explicitly
-requested, and password text is never returned.
+requested, and password/unknown-role text is never returned.
+
+`accessibility_action` is visible-desktop-only and takes the same machine-wide
+control lock as pixel input. Its `application` and `window` scopes are exact
+accessible names (copy them from the tree locator), while read-only inspection
+filters remain substring matches. It re-resolves a unique role/name or short-lived
+path before acting. Path targets must include the locator's `busName`,
+`objectPath`, and `processId`, so a replacement at the same tree index is
+rejected. `setText` and `focus` verify their own result; generic
+`invoke` requires an explicit text and/or state postcondition. Ambiguous,
+protected, stale, incomplete, or unverified actions fail closed. An action may
+have been applied even when its postcondition later fails, so inspect the
+structured `mutationIssued`, `actionApplied`, `actionOutcomeUnknown`, and
+`verified` fields separately. A timed-out RPC may have reached the app: if the
+outcome is unknown and verification fails, do not retry blindly. If the
+postcondition is already satisfied, the tool returns a verified no-op success
+without issuing the mutation again. Observed verification text is never echoed.
+JSON strings containing U+0000 are rejected at parse time so hidden suffixes
+cannot bypass C-string validation or exact postcondition comparison.
+DEFUNCT verification elements are unreadable even when the expected state is
+`false`; a missing state on a dead object cannot satisfy a postcondition.
 
 Your user must have access to `/dev/uinput` for virtual input devices:
 
@@ -120,6 +141,11 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 Deskpal remains connected to the user's desktop and creates Xvfb sessions only
 for tasks that should not interrupt it. The agent chooses the launch tool from
 the goal:
+
+Private children inherit the parent's already-locked control-file descriptor
+and validate its inode, ownership, permissions, and kernel lock before serving
+tools. Supplying `--xvfb-child`, headless environment variables, a fake file
+descriptor, or a PATH-shadowed launcher cannot escape arbitration.
 
 | Goal | Tool and routing |
 |------|------------------|

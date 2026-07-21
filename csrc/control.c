@@ -2,8 +2,8 @@
  * deskpal — visible-desktop control arbitration
  *
  * A lazy advisory lock prevents multiple MCP hosts from racing the same
- * pointer, keyboard, clipboard, or window manager. Private Xvfb sessions are
- * independent and bypass this lock.
+ * pointer, keyboard, clipboard, or window manager. Private Xvfb children
+ * inherit the parent's already-locked open-file description.
  *
  * Copyright (c) 2026 deskpal contributors
  * SPDX-License-Identifier: MIT
@@ -12,7 +12,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <ctype.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +22,9 @@
 #include <unistd.h>
 
 static int g_control_fd = -1;
+static int g_control_fd_adopted = 0;
+
+static int lock_path(char *path, size_t path_len);
 
 int control_tool_requires_lock(const char *tool_name)
 {
@@ -31,7 +33,7 @@ int control_tool_requires_lock(const char *tool_name)
 		"launch_isolated_app",
 		"type_text", "key_press", "resize_window", "mouse_move",
 		"scroll", "drag", "mouse_down", "mouse_up", "set_clipboard",
-		"hover_text", "exec", NULL
+		"hover_text", "accessibility_action", "exec", NULL
 	};
 
 	for (int i = 0; mutating_tools[i]; i++) {
@@ -40,41 +42,72 @@ int control_tool_requires_lock(const char *tool_name)
 	return 0;
 }
 
-static int lock_path(char *path, size_t path_len)
+static int validate_lock_fd(int fd, char *error, size_t error_len)
 {
-	const char *display = getenv("DISPLAY");
-	if (!display || !display[0]) display = "none";
-	char canonical[256] = { 0 };
-	const char *colon = strrchr(display, ':');
-	if (colon) {
-		size_t host_len = (size_t)(colon - display);
-		char host[128] = { 0 };
-		if (host_len >= sizeof(host)) return -1;
-		memcpy(host, display, host_len);
-		for (size_t i = 0; host[i]; i++)
-			host[i] = (char)tolower((unsigned char)host[i]);
-		const char *number = colon + 1;
-		size_t number_len = strcspn(number, ".");
-		if (number_len == 0 || number_len >= 32) return -1;
-		char number_text[32];
-		memcpy(number_text, number, number_len);
-		number_text[number_len] = '\0';
-		char *number_end = NULL;
-		errno = 0;
-		unsigned long display_number = strtoul(number_text, &number_end, 10);
-		if (errno != 0 || number_end == number_text || *number_end != '\0')
-			return -1;
-		int local = host[0] == '\0' || strcmp(host, "unix") == 0 ||
-			strcmp(host, "unix/") == 0 || strcmp(host, "localhost") == 0 ||
-			strcmp(host, "127.0.0.1") == 0 || strcmp(host, "[::1]") == 0;
-		if (snprintf(canonical, sizeof(canonical), "%s:%lu",
-		             local ? "local" : host, display_number)
-		    >= (int)sizeof(canonical))
-			return -1;
-	} else if (snprintf(canonical, sizeof(canonical), "%s", display)
-	           >= (int)sizeof(canonical)) {
+	char path[512];
+	if (lock_path(path, sizeof(path)) != 0) {
+		snprintf(error, error_len, "desktop control lock path is too long");
 		return -1;
 	}
+	struct stat expected;
+	struct stat actual;
+	if (lstat(path, &expected) != 0 || fstat(fd, &actual) != 0 ||
+	    !S_ISREG(actual.st_mode) || actual.st_uid != getuid() ||
+	    actual.st_nlink != 1 || (actual.st_mode & (S_IWGRP | S_IWOTH)) != 0 ||
+	    expected.st_dev != actual.st_dev || expected.st_ino != actual.st_ino) {
+		snprintf(error, error_len,
+			"inherited desktop control descriptor is not the active lock file");
+		return -1;
+	}
+	if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+		snprintf(error, error_len,
+			"inherited desktop control descriptor does not own the active lock");
+		return -1;
+	}
+	return 0;
+}
+
+int control_export_to_fd(int target_fd, char *error, size_t error_len)
+{
+	if (g_control_fd < 0) {
+		snprintf(error, error_len, "visible desktop control is not held");
+		return -1;
+	}
+	if (target_fd < 3 || (target_fd != g_control_fd &&
+	    dup2(g_control_fd, target_fd) < 0)) {
+		snprintf(error, error_len, "could not export desktop control lock: %s",
+			strerror(errno));
+		return -1;
+	}
+	int flags = fcntl(target_fd, F_GETFD);
+	if (flags < 0 || fcntl(target_fd, F_SETFD, flags & ~FD_CLOEXEC) != 0) {
+		snprintf(error, error_len, "could not preserve desktop control lock: %s",
+			strerror(errno));
+		if (target_fd != g_control_fd) close(target_fd);
+		return -1;
+	}
+	return 0;
+}
+
+int control_adopt_fd(int fd, char *error, size_t error_len)
+{
+	if (g_control_fd >= 0 || fd < 3 ||
+	    validate_lock_fd(fd, error, error_len) != 0)
+		return -1;
+	int flags = fcntl(fd, F_GETFD);
+	if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) != 0) {
+		snprintf(error, error_len, "could not secure inherited control lock: %s",
+			strerror(errno));
+		return -1;
+	}
+	g_control_fd = fd;
+	g_control_fd_adopted = 1;
+	return 0;
+}
+
+static int lock_path(char *path, size_t path_len)
+{
+	const char *canonical = "visible-desktop";
 
 	unsigned long hash = 2166136261u;
 	for (const unsigned char *p = (const unsigned char *)canonical; *p; p++) {
@@ -158,13 +191,16 @@ int control_acquire(char *error, size_t error_len)
 	}
 
 	g_control_fd = fd;
+	g_control_fd_adopted = 0;
 	return 0;
 }
 
 void control_cleanup(void)
 {
 	if (g_control_fd < 0) return;
-	flock(g_control_fd, LOCK_UN);
+	if (!g_control_fd_adopted)
+		flock(g_control_fd, LOCK_UN);
 	close(g_control_fd);
 	g_control_fd = -1;
+	g_control_fd_adopted = 0;
 }

@@ -11,6 +11,7 @@
 #include "sessions.h"
 #include "mcp.h"
 #include "tools.h"
+#include "control.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -423,23 +424,31 @@ static IsolatedSession *start_session(const char *screen_size,
 		close(input_pipe[1]);
 		close(output_pipe[0]);
 		close(output_pipe[1]);
+		char control_error[256];
+		if (control_export_to_fd(3, control_error,
+		    sizeof(control_error)) != 0) {
+			fprintf(stderr, "deskpal: %s\n", control_error);
+			_exit(126);
+		}
 		int closed_all = 0;
 	#ifdef SYS_close_range
-		closed_all = syscall(SYS_close_range, 3U, ~0U, 0) == 0;
+		closed_all = syscall(SYS_close_range, 4U, ~0U, 0) == 0;
 	#endif
 		if (!closed_all) {
 			long max_fd = sysconf(_SC_OPEN_MAX);
 			if (max_fd < 0) max_fd = 1024;
-			for (int fd = 3; fd < max_fd; fd++) close(fd);
+			for (int fd = 4; fd < max_fd; fd++) close(fd);
 		}
 		unsetenv("DESKPAL_HEADLESS_ACTIVE");
 
-		char *child_argv[10];
+		char *child_argv[12];
 		int arg = 0;
 		child_argv[arg++] = executable;
 		child_argv[arg++] = "--xvfb-child";
 		child_argv[arg++] = "--screen-size";
 		child_argv[arg++] = (char *)screen_size;
+		child_argv[arg++] = "--control-lock-fd";
+		child_argv[arg++] = "3";
 		if (deskpal_allow_fs) child_argv[arg++] = "--allow-fs";
 		if (deskpal_allow_exec) child_argv[arg++] = "--allow-exec";
 		child_argv[arg] = NULL;

@@ -266,7 +266,7 @@ which is verbose and order-sensitive.
 
 ---
 
-## 6. `get_focused_element`
+## 6. `get_focused_element` / `accessibility_action` ✅ shipped
 
 **Use case**: After `key_press("Tab")` ×N, assert which control is now
 focused. OCR can sometimes see focus rings on themes with strong focus
@@ -275,7 +275,7 @@ accent border that OCR can't resolve.
 
 **Surfaced by**: OTelux self-verify §3.6 (Tab cycle through modal).
 
-**Proposed signature**:
+**Shipped focused-element signature**:
 
 ```jsonc
 {
@@ -303,7 +303,55 @@ accent border that OCR can't resolve.
   for example with `--force-renderer-accessibility`; otherwise it may expose
   only an application/frame shell.
 - Accessible names and optional text are application-controlled, untrusted
-  content. Password text is never returned.
+  content. Password and unknown-role text are never returned.
+
+`accessibility_action` extends the same scoped locator model with verified
+mutation:
+
+```jsonc
+{
+  "application": "accessibility_app",
+  "window": "Settings",
+  "target": { "role": "push button", "name": "Apply" },
+  "operation": "invoke",
+  "action": "click",
+  "verify": {
+    "role": "label",
+    "name": "Status",
+    "textEquals": "Saved"
+  },
+  "timeoutMs": 1000
+}
+```
+
+Also supported:
+
+- `setText` with automatic exact text verification
+- `focus` with automatic focused-state verification
+- short-lived `path` selectors returned by `get_accessibility_tree`, together
+  with the locator's `busName`, `objectPath`, and `processId`
+
+Every mutation binds to a live AT-SPI object identity, re-resolves that exact
+target immediately before acting, and takes
+the visible-desktop control lock. Generic invokes are rejected without an
+explicit `textEquals` and/or state postcondition. Password/unknown-role,
+DEFUNCT, ambiguous, stale, incomplete, or unverified operations return errors
+rather than falling back to coordinates. A missing state on a DEFUNCT object
+cannot satisfy an expected-false postcondition.
+
+RPC timeouts are modeled explicitly: `mutationIssued` records whether the call
+was sent, `actionOutcomeUnknown` records a late/failed reply, and verification
+still polls the bound postcondition. A verified postcondition can make an
+unknown transport outcome successful; otherwise callers are warned not to
+retry blindly. Observed text is compared internally and is not echoed.
+
+Mutation `application` and `window` scopes are exact accessible names, unlike
+the substring filters used for read-only tree inspection. Copy exact scope and
+identity fields from a returned locator when using a path selector.
+Semantic mutations share the machine-wide visible-desktop lock with pixel
+input. Private Xvfb children inherit the parent's locked descriptor and
+validate the active lock-file identity; `--xvfb-child`, ambient variables,
+fake descriptors, and PATH shadowing are insufficient.
 
 ---
 

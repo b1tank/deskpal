@@ -121,6 +121,8 @@ def main():
         launch_sentinel = os.path.join(temp_dir, "shell-syntax-executed")
         runtime_probe_output = os.path.join(temp_dir, "runtime-probe-output")
         runtime_probe = os.path.join(temp_dir, "runtime-probe")
+        xvfb_shadow_sentinel = os.path.join(temp_dir, "xvfb-shadow-invoked")
+        xvfb_shadow = os.path.join(temp_dir, "xvfb-run")
         fake_screenshot = os.path.join(temp_dir, "gnome-screenshot")
         with open(fake_screenshot, "w", encoding="ascii") as script:
             script.write(
@@ -139,6 +141,13 @@ def main():
                 "exec xmessage \"$@\"\n"
             )
         os.chmod(runtime_probe, 0o755)
+        with open(xvfb_shadow, "w", encoding="ascii") as script:
+            script.write(
+                "#!/bin/sh\n"
+                f": > {xvfb_shadow_sentinel!r}\n"
+                "exit 99\n"
+            )
+        os.chmod(xvfb_shadow, 0o755)
 
         env["PATH"] = temp_dir + os.pathsep + env["PATH"]
         env["DESKPAL_SCREENSHOT_SENTINEL"] = sentinel
@@ -148,6 +157,41 @@ def main():
         env["AT_SPI_BUS_ADDRESS"] = "unix:path=/host/at-spi-bus"
         env["AT_SPI_BUS"] = "host-at-spi-bus"
         env["AT_SPI_DISPLAY"] = "host-at-spi-display"
+
+        forged_env = env.copy()
+        forged_env["DESKPAL_HEADLESS_ACTIVE"] = "1"
+        forged = subprocess.run(
+            [DESKPAL, "--xvfb-child", "--no-uinput"],
+            env=forged_env,
+            input="",
+            text=True,
+            capture_output=True,
+            timeout=3,
+        )
+        assert forged.returncode == 2, forged
+        assert "invalid inherited control lock" in forged.stderr, forged.stderr
+
+        fake_lock_read, fake_lock_write = os.pipe()
+        try:
+            os.write(fake_lock_write, b"not-a-control-lock")
+            forged_fd = subprocess.run(
+                [
+                    DESKPAL, "--xvfb-child", "--no-uinput",
+                    "--control-lock-fd", str(fake_lock_read),
+                ],
+                env=forged_env,
+                input="",
+                text=True,
+                capture_output=True,
+                timeout=3,
+                pass_fds=(fake_lock_read,),
+            )
+        finally:
+            os.close(fake_lock_read)
+            os.close(fake_lock_write)
+        assert forged_fd.returncode == 2, forged_fd
+        assert "invalid inherited control lock" in forged_fd.stderr
+
         client = DeskpalClient(
             env, args=["--no-uinput", "--allow-exec"], name="e2e-isolation"
         )
@@ -205,6 +249,9 @@ def main():
             assert session_id in text(launched)
             assert not os.path.exists(launch_sentinel), (
                 "launch arguments or environment were interpreted as shell syntax"
+            )
+            assert not os.path.exists(xvfb_shadow_sentinel), (
+                "isolated child used PATH-shadowed xvfb-run"
             )
             with open(runtime_probe_output, encoding="ascii") as probe_file:
                 assert probe_file.read().strip() == "unset|unset|unset|unset|unset"

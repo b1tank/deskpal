@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #define DESKPAL_HEADLESS_ENV "DESKPAL_HEADLESS_ACTIVE"
+#define XVFB_RUN_PATH "/usr/bin/xvfb-run"
 
 /* Security gates — off by default. Enable via --allow-fs / --allow-exec.
  * See docs/proposed-tools.md §3 and §4 for rationale. */
@@ -78,7 +79,7 @@ static int reexec_headless(int argc, char **argv, int width, int height)
 	}
 
 	int pos = 0;
-	headless_argv[pos++] = "xvfb-run";
+	headless_argv[pos++] = XVFB_RUN_PATH;
 	headless_argv[pos++] = "--auto-servernum";
 	headless_argv[pos++] = "--server-args";
 	headless_argv[pos++] = server_args;
@@ -101,7 +102,7 @@ static int reexec_headless(int argc, char **argv, int width, int height)
 	setenv("GDK_BACKEND", "x11", 1);
 	setenv("QT_QPA_PLATFORM", "xcb", 1);
 
-	execvp(headless_argv[0], headless_argv);
+	execv(headless_argv[0], headless_argv);
 	fprintf(stderr, "deskpal: failed to start xvfb-run: %s\n", strerror(errno));
 	free(headless_argv);
 	close(log_fd);
@@ -114,6 +115,8 @@ int main(int argc, char **argv)
 	int disable_uinput = 0;
 	int screen_width = 1920;
 	int screen_height = 1080;
+	int control_lock_fd = -1;
+	int control_lock_fd_count = 0;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--xvfb-child") == 0) {
@@ -130,6 +133,14 @@ int main(int argc, char **argv)
 			deskpal_allow_exec = 1;
 		} else if (strcmp(argv[i], "--no-uinput") == 0) {
 			disable_uinput = 1;
+		} else if (strcmp(argv[i], "--control-lock-fd") == 0) {
+			control_lock_fd_count++;
+			if (++i >= argc) return 2;
+			char *end = NULL;
+			long value = strtol(argv[i], &end, 10);
+			if (end == argv[i] || *end != '\0' || value < 3 || value > 1048576)
+				return 2;
+			control_lock_fd = (int)value;
 		} else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
 			print_usage();
 			return 0;
@@ -139,11 +150,29 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
-	if (!xvfb_child) unsetenv(DESKPAL_HEADLESS_ENV);
-
-	if (xvfb_child && !getenv(DESKPAL_HEADLESS_ENV)) {
+	if (!xvfb_child) {
+		if (control_lock_fd_count) {
+			fprintf(stderr, "deskpal: inherited control lock is internal-only\n");
+			return 2;
+		}
+		unsetenv(DESKPAL_HEADLESS_ENV);
+	} else if (!getenv(DESKPAL_HEADLESS_ENV)) {
+		if (control_lock_fd_count != 1) {
+			fprintf(stderr, "deskpal: isolated child requires inherited control lock\n");
+			return 2;
+		}
 		if (reexec_headless(argc, argv, screen_width, screen_height) != 0)
 			return 1;
+	} else {
+		char control_error[320];
+		if (control_lock_fd_count != 1 ||
+		    control_adopt_fd(control_lock_fd, control_error,
+		    sizeof(control_error)) != 0) {
+			fprintf(stderr, "deskpal: invalid inherited control lock%s%s\n",
+				control_lock_fd_count == 1 ? ": " : "",
+				control_lock_fd_count == 1 ? control_error : "");
+			return 2;
+		}
 	}
 	/* Disable stdout buffering for MCP stdio transport */
 	setvbuf(stdout, NULL, _IONBF, 0);

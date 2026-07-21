@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic coverage for deskpal's optional AT-SPI read tools."""
+"""Deterministic coverage for deskpal's optional AT-SPI inspection and action tools."""
 
 import json
 import os
@@ -27,6 +27,9 @@ BOUNDARY_TITLE = "Deskpal Accessibility Boundary Fixture"
 AMBIGUOUS_TITLE = "Deskpal Accessibility Ambiguous Fixture"
 STALLED_TITLE = "Deskpal Accessibility Stalled Fixture"
 UNKNOWN_TITLE = "Deskpal Accessibility Unknown Fixture"
+MUTATION_TITLE = "Deskpal Accessibility Mutation Fixture"
+INTERLEAVE_TITLE = "Deskpal Accessibility Interleave Fixture"
+DEFUNCT_TITLE = "Deskpal Accessibility Defunct Fixture"
 
 
 def require_dependencies():
@@ -102,6 +105,8 @@ def run_rich_suite(env):
     bus = None
     fixture = None
     auxiliary_fixtures = []
+    auxiliary_xvfbs = []
+    auxiliary_directories = []
     client = None
     try:
         bus = start_accessibility_bus(env)
@@ -142,7 +147,7 @@ def run_rich_suite(env):
             tree_result = client.tool(
                 "get_accessibility_tree",
                 {
-                    "application": "accessibility_app",
+                    "application": "accessibility_app.py",
                     "window": TITLE,
                     "maxNodes": 100,
                     "includeAttributes": True,
@@ -172,7 +177,7 @@ def run_rich_suite(env):
         exact_limit = client.tool(
             "get_accessibility_tree",
             {
-                "application": "accessibility_app",
+                "application": "accessibility_app.py",
                 "window": TITLE,
                 "maxNodes": tree["nodeCount"],
             },
@@ -199,17 +204,20 @@ def run_rich_suite(env):
         assert password["role"] == "password text", password
         assert password["textProtected"] is True, password
         assert "text" not in password, password
-        assert password["locator"]["name"] == "", password
+        assert "name" not in password["locator"], password
 
         button = next(
             node for node in nodes if node["name"] == "Apply validation message"
         )
         assert button["role"] == "push button", button
         assert "click" in button["actions"], button
+        checkbox_node = next(
+            node for node in nodes if node["name"] == "Approval checkbox"
+        )
 
         focused_result = client.tool(
             "get_focused_element",
-            {"application": "accessibility_app", "window": TITLE},
+            {"application": "accessibility_app.py", "window": TITLE},
         )
         focused = accessibility_payload(focused_result)
         assert focused["matchCount"] == 1, focused
@@ -223,13 +231,488 @@ def run_rich_suite(env):
         focused_with_text = client.tool(
             "get_focused_element",
             {
-                "application": "accessibility_app",
+                "application": "accessibility_app.py",
                 "window": TITLE,
                 "includeText": True,
             },
         )
         focused_with_text = accessibility_payload(focused_with_text)
         assert focused_with_text["element"]["text"] == "", focused_with_text
+
+        def visible_text(name):
+            snapshot = accessibility_payload(
+                client.tool(
+                    "get_accessibility_tree",
+                    {
+                        "application": "accessibility_app.py",
+                        "window": TITLE,
+                        "includeText": True,
+                        "maxNodes": 100,
+                    },
+                )
+            )
+            return next(
+                node["text"] for node in find_nodes(snapshot)
+                if node["name"] == name
+            )
+
+        set_text_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "text", "name": "Validation message"},
+                "operation": "setText",
+                "value": "semantic action value",
+            },
+        )
+        assert set_text_result.get("isError") is not True, set_text_result
+        set_text = accessibility_payload(set_text_result)
+        assert set_text["success"] is True, set_text
+        assert set_text["actionApplied"] is True, set_text
+        assert set_text["verified"] is True, set_text
+        assert set_text["verification"]["actualTextObserved"] is True
+
+        idempotent_set_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "text", "name": "Validation message"},
+                "operation": "setText",
+                "value": "semantic action value",
+            },
+        )
+        assert idempotent_set_result.get("isError") is not True
+        idempotent_set = accessibility_payload(idempotent_set_result)
+        assert idempotent_set["success"] is True, idempotent_set
+        assert idempotent_set["actionApplied"] is False, idempotent_set
+        assert idempotent_set["verified"] is True, idempotent_set
+        assert idempotent_set["verification"]["alreadySatisfied"] is True
+
+        clear_text_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "text", "name": "Validation message"},
+                "operation": "setText",
+                "value": "",
+            },
+        )
+        assert clear_text_result.get("isError") is not True, clear_text_result
+        assert accessibility_payload(clear_text_result)["success"] is True
+        restore_text_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "text", "name": "Validation message"},
+                "operation": "setText",
+                "value": "semantic action value",
+            },
+        )
+        assert restore_text_result.get("isError") is not True, restore_text_result
+
+        focus_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": checkbox_node["locator"],
+                "operation": "focus",
+            },
+        )
+        assert focus_result.get("isError") is not True, focus_result
+        focus_action = accessibility_payload(focus_result)
+        assert focus_action["success"] is True, focus_action
+        assert focus_action["verification"]["actualStateValue"] is True
+
+        invoke_button_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Fixture status",
+                    "textEquals": "Status: semantic action value",
+                },
+            },
+        )
+        assert invoke_button_result.get("isError") is not True, invoke_button_result
+        invoke_button = accessibility_payload(invoke_button_result)
+        assert invoke_button["success"] is True, invoke_button
+        assert invoke_button["actionMatchCount"] == 1, invoke_button
+        assert invoke_button["verification"]["satisfied"] is True
+        assert visible_text("Apply count") == "Apply count: 1"
+
+        idempotent_invoke_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Fixture status",
+                    "textEquals": "Status: semantic action value",
+                },
+            },
+        )
+        assert idempotent_invoke_result.get("isError") is not True
+        idempotent_invoke = accessibility_payload(idempotent_invoke_result)
+        assert idempotent_invoke["success"] is True, idempotent_invoke
+        assert idempotent_invoke["actionApplied"] is False, idempotent_invoke
+        assert idempotent_invoke["verified"] is True, idempotent_invoke
+        assert idempotent_invoke["verification"]["alreadySatisfied"] is True
+        assert visible_text("Apply count") == "Apply count: 1"
+
+        invoke_checkbox_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "check box", "name": "Approval checkbox"},
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "check box",
+                    "name": "Approval checkbox",
+                    "state": "checked",
+                    "stateValue": True,
+                },
+            },
+        )
+        assert invoke_checkbox_result.get("isError") is not True, invoke_checkbox_result
+        invoke_checkbox = accessibility_payload(invoke_checkbox_result)
+        assert invoke_checkbox["success"] is True, invoke_checkbox
+        assert invoke_checkbox["verification"]["actualStateValue"] is True
+
+        failed_verification_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "timeoutMs": 750,
+                "verify": {
+                    "role": "label",
+                    "name": "Fixture status",
+                    "textEquals": "Status: value that will not appear",
+                },
+            },
+        )
+        assert failed_verification_result.get("isError") is True
+        failed_verification = accessibility_payload(failed_verification_result)
+        assert failed_verification["actionApplied"] is True, failed_verification
+        assert failed_verification["verified"] is False, failed_verification
+        assert failed_verification["errorCode"] == "verification_failed", failed_verification
+        assert visible_text("Apply count") == "Apply count: 2"
+
+        truncated_verification_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Long verification",
+                    "textEquals": "x" * 2048,
+                },
+            },
+        )
+        assert truncated_verification_result.get("isError") is True
+        truncated_verification = accessibility_payload(
+            truncated_verification_result
+        )
+        assert truncated_verification["errorCode"] == "verification_unreadable"
+        assert truncated_verification["actionApplied"] is False
+        assert visible_text("Apply count") == "Apply count: 2"
+
+        ambiguous_target_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "push button", "name": "Duplicate action"},
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Fixture status",
+                    "textEquals": "never",
+                },
+            },
+        )
+        assert ambiguous_target_result.get("isError") is True
+        ambiguous_target = accessibility_payload(ambiguous_target_result)
+        assert ambiguous_target["errorCode"] == "target_ambiguous", ambiguous_target
+        assert ambiguous_target["actionApplied"] is False, ambiguous_target
+        assert visible_text("Apply count") == "Apply count: 2"
+
+        ambiguous_verification_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "push button",
+                    "name": "Duplicate action",
+                    "state": "enabled",
+                    "stateValue": True,
+                },
+            },
+        )
+        assert ambiguous_verification_result.get("isError") is True
+        ambiguous_verification = accessibility_payload(
+            ambiguous_verification_result
+        )
+        assert ambiguous_verification["errorCode"] == "verification_unresolved"
+        assert ambiguous_verification["actionApplied"] is False
+        assert visible_text("Apply count") == "Apply count: 2"
+
+        stale_path_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "path": [999],
+                    "busName": button["locator"]["busName"],
+                    "objectPath": button["locator"]["objectPath"],
+                    "processId": button["locator"]["processId"],
+                },
+                "operation": "focus",
+            },
+        )
+        assert stale_path_result.get("isError") is True
+        stale_path = accessibility_payload(stale_path_result)
+        assert stale_path["errorCode"] == "target_not_found", stale_path
+
+        protected_target_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": password["locator"],
+                "operation": "setText",
+                "value": "must-not-write",
+            },
+        )
+        assert protected_target_result.get("isError") is True
+        protected_target = accessibility_payload(protected_target_result)
+        assert protected_target["errorCode"] == "protected_target", protected_target
+
+        missing_verification = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "click",
+            },
+        )
+        assert missing_verification.get("isError") is True, missing_verification
+
+        orphan_state_value = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Fixture status",
+                    "stateValue": True,
+                    "textEquals": "unused",
+                },
+            },
+        )
+        assert orphan_state_value.get("isError") is True, orphan_state_value
+
+        invalid_action_path = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "target": {"role": "text", "path": [-1]},
+                "operation": "focus",
+            },
+        )
+        assert invalid_action_path.get("isError") is True, invalid_action_path
+
+        substring_scope = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app",
+                "window": TITLE,
+                "target": {"role": "text", "name": "Validation message"},
+                "operation": "focus",
+            },
+        )
+        assert substring_scope.get("isError") is True, substring_scope
+        substring_scope_payload = accessibility_payload(substring_scope)
+        assert substring_scope_payload["errorCode"] == "target_not_found"
+
+        unknown_action_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Apply validation message",
+                },
+                "operation": "invoke",
+                "action": "not-an-action",
+                "verify": {
+                    "role": "label",
+                    "name": "Fixture status",
+                    "textEquals": "unchanged",
+                },
+            },
+        )
+        assert unknown_action_result.get("isError") is True
+        unknown_action = accessibility_payload(unknown_action_result)
+        assert unknown_action["errorCode"] == "action_not_found", unknown_action
+        assert visible_text("Apply count") == "Apply count: 2"
+
+        original_entry_locator = entry["locator"]
+        replace_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Replace validation field",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Entry generation",
+                    "textEquals": "Entry generation: 2",
+                },
+            },
+        )
+        assert replace_result.get("isError") is not True, replace_result
+        assert accessibility_payload(replace_result)["verified"] is True
+        replacement_snapshot = accessibility_payload(
+            client.tool(
+                "get_accessibility_tree",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "includeText": True,
+                    "maxNodes": 100,
+                },
+            )
+        )
+        replacement = next(
+            node for node in find_nodes(replacement_snapshot)
+            if node["name"] == "Replacement message"
+        )
+        assert replacement["path"] == entry["path"], replacement
+        assert replacement["locator"]["objectPath"] != original_entry_locator["objectPath"]
+        stale_reused_path = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": original_entry_locator,
+                "operation": "setText",
+                "value": "must-not-reach-replacement",
+            },
+        )
+        assert stale_reused_path.get("isError") is True, stale_reused_path
+        stale_reused_payload = accessibility_payload(stale_reused_path)
+        assert stale_reused_payload["errorCode"] == "target_not_found"
+        replacement_after = accessibility_payload(
+            client.tool(
+                "get_accessibility_tree",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "includeText": True,
+                    "maxNodes": 100,
+                },
+            )
+        )
+        replacement_node = next(
+            node for node in find_nodes(replacement_after)
+            if node["name"] == "Replacement message"
+        )
+        assert replacement_node["text"] == "", replacement_node
+
+        with tempfile.TemporaryDirectory(
+            prefix="deskpal-accessibility-contender-"
+        ) as contender_dir:
+            contender_xvfb, contender_env = start_xvfb(contender_dir, "800x600")
+            contender_env["DBUS_SESSION_BUS_ADDRESS"] = env[
+                "DBUS_SESSION_BUS_ADDRESS"
+            ]
+            contender = DeskpalClient(
+                contender_env,
+                args=["--no-uinput"],
+                name="e2e-accessibility-lock-contender",
+            )
+            try:
+                blocked_action = contender.tool(
+                    "accessibility_action",
+                    {
+                        "application": "accessibility_app.py",
+                        "window": TITLE,
+                        "target": {
+                            "role": "text",
+                            "name": "Replacement message",
+                        },
+                        "operation": "focus",
+                    },
+                )
+                assert blocked_action.get("isError") is True, blocked_action
+                assert "control" in text(blocked_action).lower(), blocked_action
+            finally:
+                contender.close()
+                stop_process(contender_xvfb)
 
         def start_fixture_mode(mode, title):
             mode_env = fixture_env.copy()
@@ -258,7 +741,7 @@ def run_rich_suite(env):
                         client.tool(
                             "get_accessibility_tree",
                             {
-                                "application": "accessibility_app",
+                                "application": "accessibility_app.py",
                                 "window": title,
                                 "maxDepth": 1,
                                 "maxNodes": 2,
@@ -279,7 +762,7 @@ def run_rich_suite(env):
         boundary_focus = accessibility_payload(
             client.tool(
                 "get_focused_element",
-                {"application": "accessibility_app", "window": BOUNDARY_TITLE},
+                {"application": "accessibility_app.py", "window": BOUNDARY_TITLE},
             )
         )
         assert boundary_focus["matchCount"] == 1, boundary_focus
@@ -291,7 +774,7 @@ def run_rich_suite(env):
         deep_focus = accessibility_payload(
             client.tool(
                 "get_focused_element",
-                {"application": "accessibility_app", "window": DEEP_TITLE},
+                {"application": "accessibility_app.py", "window": DEEP_TITLE},
             )
         )
         assert deep_focus["incomplete"] is True, deep_focus
@@ -300,14 +783,23 @@ def run_rich_suite(env):
         assert "element" not in deep_focus, deep_focus
 
         for _ in range(2):
-            ambiguous_env = fixture_env.copy()
+            ambiguous_dir = tempfile.TemporaryDirectory(
+                prefix="deskpal-accessibility-ambiguous-"
+            )
+            auxiliary_directories.append(ambiguous_dir)
+            ambiguous_xvfb, ambiguous_env = start_xvfb(
+                ambiguous_dir.name, "800x600"
+            )
+            auxiliary_xvfbs.append(ambiguous_xvfb)
+            ambiguous_env["DBUS_SESSION_BUS_ADDRESS"] = env[
+                "DBUS_SESSION_BUS_ADDRESS"
+            ]
+            ambiguous_env.pop("NO_AT_BRIDGE", None)
+            ambiguous_env["GTK_MODULES"] = "gail:atk-bridge"
             ambiguous_env["DESKPAL_A11Y_FIXTURE_MODE"] = "ambiguous"
             auxiliary_fixtures.append(
                 subprocess.Popen(
-                    [
-                        "xvfb-run", "--auto-servernum", "--server-args",
-                        "-screen 0 800x600x24", "/usr/bin/python3", FIXTURE,
-                    ],
+                    ["/usr/bin/python3", FIXTURE],
                     env=ambiguous_env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
@@ -321,7 +813,7 @@ def run_rich_suite(env):
                 client.tool(
                     "get_focused_element",
                     {
-                        "application": "accessibility_app",
+                        "application": "accessibility_app.py",
                         "window": AMBIGUOUS_TITLE,
                     },
                 )
@@ -340,7 +832,7 @@ def run_rich_suite(env):
         tree_with_text = client.tool(
             "get_accessibility_tree",
             {
-                "application": "accessibility_app",
+                "application": "accessibility_app.py",
                 "window": TITLE,
                 "maxNodes": 100,
                 "includeText": True,
@@ -348,7 +840,10 @@ def run_rich_suite(env):
         )
         tree_with_text = accessibility_payload(tree_with_text)
         text_nodes = find_nodes(tree_with_text)
-        text_entry = next(node for node in text_nodes if node["name"] == "Validation message")
+        text_entry = next(
+            node for node in text_nodes
+            if node["name"] == "Replacement message"
+        )
         assert text_entry["text"] == "", text_entry
         protected = next(node for node in text_nodes if node["name"] == "Protected text")
         assert "text" not in protected, protected
@@ -359,7 +854,7 @@ def run_rich_suite(env):
             client.tool(
                 "get_accessibility_tree",
                 {
-                    "application": "accessibility_app",
+                    "application": "accessibility_app.py",
                     "window": UNKNOWN_TITLE,
                     "includeText": True,
                     "includeAttributes": True,
@@ -376,15 +871,129 @@ def run_rich_suite(env):
         ]
         assert protected_unknown, unknown_tree
         assert all(node["textProtected"] for node in protected_unknown)
+        unknown_node = protected_unknown[-1]
+        unknown_mutation = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": UNKNOWN_TITLE,
+                "target": unknown_node["locator"],
+                "operation": "setText",
+                "value": "must-not-write",
+            },
+        )
+        assert unknown_mutation.get("isError") is True, unknown_mutation
+        unknown_mutation_payload = accessibility_payload(unknown_mutation)
+        assert unknown_mutation_payload["errorCode"] == "protected_target"
+
+        start_fixture_mode("mutation", MUTATION_TITLE)
+        unknown_outcome_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": MUTATION_TITLE,
+                "target": {"role": "text", "name": "Slow mutation field"},
+                "operation": "setText",
+                "value": "completed after timeout",
+                "timeoutMs": 3000,
+            },
+        )
+        assert unknown_outcome_result.get("isError") is not True, unknown_outcome_result
+        unknown_outcome = accessibility_payload(unknown_outcome_result)
+        assert unknown_outcome["mutationIssued"] is True, unknown_outcome
+        assert unknown_outcome["actionApplied"] is False, unknown_outcome
+        assert unknown_outcome["actionOutcomeUnknown"] is True, unknown_outcome
+        assert unknown_outcome["verified"] is True, unknown_outcome
+        assert unknown_outcome["success"] is True, unknown_outcome
+
+        start_fixture_mode("interleave", INTERLEAVE_TITLE)
+        interleaved_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": INTERLEAVE_TITLE,
+                "target": {
+                    "role": "push button",
+                    "name": "Interleave target",
+                },
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "text",
+                    "name": "Interleave verification",
+                    "textEquals": "original clicked",
+                },
+            },
+        )
+        assert interleaved_result.get("isError") is True, interleaved_result
+        interleaved = accessibility_payload(interleaved_result)
+        assert interleaved["errorCode"] == "target_changed", interleaved
+        assert interleaved["actionApplied"] is False, interleaved
+        interleave_snapshot = accessibility_payload(
+            client.tool(
+                "get_accessibility_tree",
+                {
+                    "application": "accessibility_app.py",
+                    "window": INTERLEAVE_TITLE,
+                    "includeText": True,
+                    "maxNodes": 100,
+                },
+            )
+        )
+        interleave_nodes = find_nodes(interleave_snapshot)
+        interleave_count = next(
+            node for node in interleave_nodes
+            if node["name"] == "Interleave count"
+        )
+        assert interleave_count["text"] == "Interleave count: 0", interleave_count
+
+        start_fixture_mode("defunct", DEFUNCT_TITLE)
+        defunct_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": DEFUNCT_TITLE,
+                "target": {"role": "push button", "name": "Defunct target"},
+                "operation": "invoke",
+                "action": "click",
+                "verify": {
+                    "role": "text",
+                    "name": "Defunct verifier",
+                    "state": "editable",
+                    "stateValue": False,
+                },
+            },
+        )
+        assert defunct_result.get("isError") is True, defunct_result
+        defunct_payload = accessibility_payload(defunct_result)
+        assert defunct_payload["errorCode"] == "verification_unresolved", defunct_payload
+        assert defunct_payload["mutationIssued"] is False
+        assert defunct_payload["actionApplied"] is False
+        defunct_snapshot = accessibility_payload(
+            client.tool(
+                "get_accessibility_tree",
+                {
+                    "application": "accessibility_app.py",
+                    "window": DEFUNCT_TITLE,
+                    "includeText": True,
+                    "maxNodes": 100,
+                },
+            )
+        )
+        defunct_count = next(
+            node for node in find_nodes(defunct_snapshot)
+            if node["name"] == "Defunct count"
+        )
+        assert defunct_count["text"] == "Defunct count: 0", defunct_count
 
         default_attributes = client.tool(
             "get_accessibility_tree",
-            {"application": "accessibility_app", "window": TITLE, "maxNodes": 100},
+            {"application": "accessibility_app.py", "window": TITLE, "maxNodes": 100},
         )
         default_attributes = accessibility_payload(default_attributes)
         default_entry = next(
             node for node in find_nodes(default_attributes)
-            if node["name"] == "Validation message"
+            if node["name"] == "Replacement message"
         )
         assert default_entry["attributes"] == {}, default_entry
 
@@ -402,7 +1011,7 @@ def run_rich_suite(env):
 
         truncated = client.tool(
             "get_accessibility_tree",
-            {"application": "accessibility_app", "window": TITLE, "maxNodes": 2},
+            {"application": "accessibility_app.py", "window": TITLE, "maxNodes": 2},
         )
         truncated = accessibility_payload(truncated)
         assert truncated["nodeCount"] == 2, truncated
@@ -421,7 +1030,7 @@ def run_rich_suite(env):
         assert malformed.get("isError") is True, malformed
         malformed_boolean = client.tool(
             "get_accessibility_tree",
-            {"application": "accessibility_app", "includeText": "yes"},
+            {"application": "accessibility_app.py", "includeText": "yes"},
         )
         assert malformed_boolean.get("isError") is True, malformed_boolean
         oversized_filter = client.tool(
@@ -439,13 +1048,25 @@ def run_rich_suite(env):
                 "timeout": 3,
             },
         )
+        assert "sessionId" in isolated, (client.proc.pid, isolated)
         isolated_id = isolated["sessionId"]
         routed = client.tool(
             "get_accessibility_tree",
-            {"application": "accessibility_app", "sessionId": isolated_id},
+            {"application": "accessibility_app.py", "sessionId": isolated_id},
         )
         assert routed.get("isError") is True, routed
         assert "visible desktop only" in text(routed), routed
+        routed_action = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "target": {"role": "text", "name": "Validation message"},
+                "operation": "focus",
+                "sessionId": isolated_id,
+            },
+        )
+        assert routed_action.get("isError") is True, routed_action
+        assert "visible desktop only" in text(routed_action), routed_action
         client.tool("close_isolated_session", {"sessionId": isolated_id})
 
         direct_env = env.copy()
@@ -462,7 +1083,7 @@ def run_rich_suite(env):
             direct_tree = accessibility_payload(
                 direct_client.tool(
                     "get_accessibility_tree",
-                    {"application": "accessibility_app", "window": TITLE},
+                    {"application": "accessibility_app.py", "window": TITLE},
                 )
             )
             assert direct_tree["nodeCount"] >= 5, direct_tree
@@ -478,7 +1099,7 @@ def run_rich_suite(env):
                 stalled_result["value"] = client.tool(
                     "get_accessibility_tree",
                     {
-                        "application": "accessibility_app",
+                        "application": "accessibility_app.py",
                         "window": STALLED_TITLE,
                         "includeText": True,
                         "includeAttributes": True,
@@ -514,6 +1135,10 @@ def run_rich_suite(env):
             stop_process(fixture)
         for auxiliary in auxiliary_fixtures:
             stop_process(auxiliary)
+        for auxiliary_xvfb in auxiliary_xvfbs:
+            stop_process(auxiliary_xvfb)
+        for auxiliary_directory in auxiliary_directories:
+            auxiliary_directory.cleanup()
         if bus is not None:
             stop_process(bus)
 
@@ -534,6 +1159,7 @@ def main():
                     "accessibility_status",
                     "get_accessibility_tree",
                     "get_focused_element",
+                    "accessibility_action",
                 ):
                     tool = tool_by_name(tools, name)
                     assert "sessionId" not in tool["inputSchema"]["properties"], tool
@@ -554,6 +1180,52 @@ def main():
                 )["inputSchema"]
                 assert focused_schema["properties"]["application"]["maxLength"] == 512
                 assert focused_schema["properties"]["window"]["maxLength"] == 512
+                action_schema = tool_by_name(
+                    tools, "accessibility_action"
+                )["inputSchema"]
+                assert action_schema["properties"]["timeoutMs"]["type"] == "integer"
+                assert action_schema["properties"]["target"]["properties"]["path"]["maxItems"] == 32
+                assert action_schema["properties"]["target"]["properties"]["busName"]["maxLength"] == 255
+                assert action_schema["properties"]["target"]["properties"]["objectPath"]["maxLength"] == 1024
+                assert action_schema["properties"]["target"]["properties"]["processId"]["type"] == "integer"
+                assert action_schema["properties"]["verify"]["properties"]["stateValue"]["type"] == "boolean"
+                target_conditions = action_schema["properties"]["target"]["allOf"]
+                assert {
+                    "busName", "objectPath", "processId"
+                }.issubset(target_conditions[0]["then"]["required"])
+                verify_conditions = action_schema["properties"]["verify"]["allOf"]
+                assert {
+                    "busName", "objectPath", "processId"
+                }.issubset(verify_conditions[0]["then"]["required"])
+                operation_conditions = action_schema["allOf"]
+                assert "value" in operation_conditions[0]["then"]["required"]
+                assert {"action", "verify"}.issubset(
+                    operation_conditions[1]["then"]["required"]
+                )
+                for nul_arguments in (
+                    {
+                        "application": "anything",
+                        "target": {"role": "text", "name": "anything"},
+                        "operation": "setText",
+                        "value": "safe\x00hidden",
+                    },
+                    {
+                        "application": "anything",
+                        "target": {"role": "push button", "name": "anything"},
+                        "operation": "invoke",
+                        "action": "click",
+                        "verify": {
+                            "role": "label",
+                            "name": "status",
+                            "textEquals": "saved\x00hidden",
+                        },
+                    },
+                ):
+                    nul_response = unavailable.call(
+                        "tools/call",
+                        {"name": "accessibility_action", "arguments": nul_arguments},
+                    )
+                    assert nul_response["error"]["code"] == -32700, nul_response
                 status = unavailable.tool("accessibility_status")
                 status_payload = accessibility_payload(status)
                 compiled = status_payload["compiled"]
@@ -573,6 +1245,17 @@ def main():
                 )
                 assert unavailable_focus["available"] is False, unavailable_focus
                 assert unavailable_focus["matchCount"] == 0, unavailable_focus
+                unavailable_action = unavailable.tool(
+                    "accessibility_action",
+                    {
+                        "application": "anything",
+                        "target": {"role": "text", "name": "anything"},
+                        "operation": "focus",
+                    },
+                )
+                assert unavailable_action.get("isError") is True, unavailable_action
+                unavailable_action_payload = accessibility_payload(unavailable_action)
+                assert unavailable_action_payload["errorCode"] == "backend_unavailable"
             finally:
                 unavailable.close()
 
@@ -617,7 +1300,7 @@ def main():
             subprocess.run(command, env=rich_env, cwd=ROOT, check=True)
         finally:
             stop_process(xvfb)
-    print("PASS: optional AT-SPI status, bounded tree, and focused element")
+    print("PASS: optional AT-SPI inspection and verified semantic actions")
 
 
 if __name__ == "__main__":

@@ -763,6 +763,14 @@ static unsigned char utf16_literal_to_utf8(const unsigned char * const input_poi
         codepoint = first_code;
     }
 
+    /* cJSON stores strings as NUL-terminated C strings without a separate
+     * decoded length. Accepting U+0000 would hide any following suffix from
+     * validation, comparison, and re-serialization. */
+    if (codepoint == 0)
+    {
+        goto fail;
+    }
+
     /* encode as UTF-8
      * takes at maximum 4 bytes to encode:
      * 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx */

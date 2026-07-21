@@ -162,7 +162,7 @@ This is the smallest useful production slice and should be implemented first.
 Implemented on 2026-07-20: optional `atspi-2` build integration,
 `accessibility_status`, bounded `get_accessibility_tree`, and
 `get_focused_element`, with deterministic private D-Bus/AT-SPI fixture tests.
-The tools are read-only, preserve existing X11 routing, do not enable host
+The Slice 1 inspection tools are read-only, preserve existing X11 routing, do not enable host
 accessibility settings, expose semantic locators as short-lived paths, omit
 text/attributes by default, redact password text, and mark semantic content as
 untrusted application output.
@@ -179,6 +179,27 @@ untrusted application output.
 
 After this slice, accessible apps should have substantially fewer focus and
 coordinate failures.
+
+Partially implemented on 2026-07-20: `accessibility_action` performs uniquely
+resolved `setText`, child `focus`, and named `invoke` operations. Path selectors
+carry a live bus/object/process identity so same-index replacements fail
+closed, and mutation app/window scopes use exact accessible names. It captures
+preconditions, requires explicit text/state verification for generic invokes,
+re-resolves postcondition targets, combines immediate checks with bounded
+10 ms polling, uses the visible-desktop control lock, and fails closed for
+ambiguous, protected, stale, incomplete, or unverified targets. Deterministic
+coverage includes idempotent text, button/checkbox actions, path locators,
+verification timeout, lock contention, protected/unknown roles, and isolated
+session rejection. Late mutation replies are represented as unknown outcomes;
+postcondition polling continues, and an unverified unknown outcome must not be
+retried blindly. DEFUNCT verification objects are rejected before false-state
+postconditions can become no-op successes. Private Xvfb children share the
+parent's inherited kernel lock after validating the active lock-file identity;
+they do not receive an ambient flag-based bypass.
+
+Still remaining in Slice 2: selection/value interfaces, a retained AT-SPI event
+cache, richer ancestor/attribute locators, and live forced-accessibility
+Electron/GNOME Terminal acceptance beyond the deterministic GTK fixture.
 
 ### Slice 3: Backend extraction and routing (2-4 weeks)
 
