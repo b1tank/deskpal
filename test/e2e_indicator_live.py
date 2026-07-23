@@ -220,6 +220,10 @@ def run_suite():
             node for node in semantic_nodes
             if node.get("name") == "Validation message"
         )
+        semantic_checkbox = next(
+            node for node in semantic_nodes
+            if node.get("name") == "Approval checkbox"
+        )
         press_baseline = desktop_state()
         press_arguments = {
             "captureId": app_state["captureId"],
@@ -296,6 +300,34 @@ def run_suite():
         assert idempotent_text["actionApplied"] is False, idempotent_text
         assert idempotent_text["inputDelivered"] is False, idempotent_text
         owner.tool("agent_cursor_hide", {"cursorId": "semantic-text-live"})
+        toggle_arguments = {
+            "captureId": app_state["captureId"],
+            "target": semantic_checkbox["locator"],
+            "action": "click",
+            "verify": {
+                "role": "check box",
+                "name": "Approval checkbox",
+                "state": "checked",
+                "stateValue": True,
+            },
+            "cursorId": "semantic-toggle-live",
+            "color": "#F59E0B",
+            "label": "semantic toggle",
+        }
+        toggle_result = json.loads(
+            text(owner.tool("agent_semantic_press", toggle_arguments))
+        )
+        assert toggle_result["verified"] is True, toggle_result
+        assert toggle_result["actionApplied"] is True, toggle_result
+        assert toggle_result["inputDelivered"] is True, toggle_result
+        assert toggle_result["sharedPointerMoved"] is False, toggle_result
+        idempotent_toggle = json.loads(
+            text(owner.tool("agent_semantic_press", toggle_arguments))
+        )
+        assert idempotent_toggle["verified"] is True, idempotent_toggle
+        assert idempotent_toggle["actionApplied"] is False, idempotent_toggle
+        assert idempotent_toggle["inputDelivered"] is False, idempotent_toggle
+        owner.tool("agent_cursor_hide", {"cursorId": "semantic-toggle-live"})
         press_hidden = json.loads(
             text(owner.tool("agent_cursor_hide", {"cursorId": "semantic-live"}))
         )

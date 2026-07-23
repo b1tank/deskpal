@@ -60,6 +60,6 @@ application mutation.
   events/frame diffs are planned to tighten this interval further.
 - Focus changes are measured when X11 focus is knowable. Stacking changes are
   currently reported as unknown rather than falsely claimed unchanged.
-- These first slices implement invoke/press and whole-value text replacement.
-  Toggle, selection, generic value, text-range, scroll, menu, and
-  expandable-control routes remain future work.
+- These first slices implement invoke/press, verified checkbox toggles through
+  press, and whole-value text replacement. Selection, generic value,
+  text-range, scroll, menu, and expandable-control routes remain future work.
