@@ -712,24 +712,36 @@ static cJSON *semantic_stage_transform(const cJSON *semantic,
 		return transform;
 	}
 
-	double scale_x = (double)target->width / width->valuedouble;
-	double scale_y = (double)target->height / height->valuedouble;
-	double scale_max = fmax(scale_x, scale_y);
-	if (scale_x <= 0 || scale_y <= 0 ||
-	    fabs(scale_x - scale_y) > scale_max * 0.05) {
-		cJSON_AddStringToObject(transform, "reason", "semantic_window_scale_nonuniform");
-		cJSON_AddNumberToObject(transform, "candidateScaleX", scale_x);
-		cJSON_AddNumberToObject(transform, "candidateScaleY", scale_y);
+	/* X11 geometry describes the client content while AT-SPI's top-level frame
+	 * commonly includes the compositor title bar. Derive one uniform scale from
+	 * the shared width, then verify left and bottom alignment; the remaining
+	 * vertical difference is a bounded top decoration inset. */
+	double scale = (double)target->width / width->valuedouble;
+	double candidate_scale_y = (double)target->height / height->valuedouble;
+	double offset_x = target->x - x->valuedouble * scale;
+	double offset_y = (target->y + target->height) -
+		(y->valuedouble + height->valuedouble) * scale;
+	double top_inset = target->y - (y->valuedouble * scale + offset_y);
+	if (scale < 0.25 || scale > 8.0 || fabs(offset_x) > 8.0 ||
+	    fabs(offset_y) > 8.0 || top_inset < -8.0 || top_inset > 256.0) {
+		cJSON_AddStringToObject(transform, "reason",
+		                       "semantic_window_frame_alignment_failed");
+		cJSON_AddNumberToObject(transform, "candidateScaleX", scale);
+		cJSON_AddNumberToObject(transform, "candidateScaleY", candidate_scale_y);
+		cJSON_AddNumberToObject(transform, "candidateTopInset", top_inset);
+		cJSON_AddItemToObject(transform, "semanticWindowBounds",
+		                     cJSON_Duplicate(bounds, 1));
+		cJSON_AddItemToObject(transform, "stageWindowGeometry",
+		                     window_geometry_json(target));
 		return transform;
 	}
 
-	double offset_x = target->x - x->valuedouble * scale_x;
-	double offset_y = target->y - y->valuedouble * scale_y;
 	cJSON_ReplaceItemInObject(transform, "supported", cJSON_CreateBool(1));
-	cJSON_AddNumberToObject(transform, "scaleX", scale_x);
-	cJSON_AddNumberToObject(transform, "scaleY", scale_y);
+	cJSON_AddNumberToObject(transform, "scaleX", scale);
+	cJSON_AddNumberToObject(transform, "scaleY", scale);
 	cJSON_AddNumberToObject(transform, "offsetX", offset_x);
 	cJSON_AddNumberToObject(transform, "offsetY", offset_y);
+	cJSON_AddNumberToObject(transform, "topDecorationInset", top_inset);
 	cJSON_AddBoolToObject(transform, "verifiedAgainstWindowGeometry", 1);
 	cJSON_AddItemToObject(transform, "semanticWindowBounds",
 	                     cJSON_Duplicate(bounds, 1));
@@ -1203,6 +1215,307 @@ cJSON *tool_agent_cursor_hide(const cJSON *params)
 	return result;
 }
 
+/* ── capture-bound semantic press ────────────────────────────────────────── */
+
+static int json_integer_arrays_equal(const cJSON *left, const cJSON *right)
+{
+	if (!cJSON_IsArray(left) || !cJSON_IsArray(right) ||
+	    cJSON_GetArraySize(left) != cJSON_GetArraySize(right))
+		return 0;
+	for (int i = 0; i < cJSON_GetArraySize(left); i++) {
+		const cJSON *a = cJSON_GetArrayItem(left, i);
+		const cJSON *b = cJSON_GetArrayItem(right, i);
+		if (!cJSON_IsNumber(a) || !cJSON_IsNumber(b) ||
+		    a->valuedouble != a->valueint || b->valuedouble != b->valueint ||
+		    a->valueint != b->valueint)
+			return 0;
+	}
+	return 1;
+}
+
+static int semantic_node_matches_locator(const cJSON *node,
+                                          const cJSON *target)
+{
+	const cJSON *role = cJSON_GetObjectItem(node, "role");
+	const cJSON *target_role = cJSON_GetObjectItem(target, "role");
+	const cJSON *locator = cJSON_GetObjectItem(node, "locator");
+	const cJSON *bus_name = cJSON_GetObjectItem(locator, "busName");
+	const cJSON *object_path = cJSON_GetObjectItem(locator, "objectPath");
+	const cJSON *process_id = cJSON_GetObjectItem(locator, "processId");
+	const cJSON *target_bus = cJSON_GetObjectItem(target, "busName");
+	const cJSON *target_object = cJSON_GetObjectItem(target, "objectPath");
+	const cJSON *target_process = cJSON_GetObjectItem(target, "processId");
+	return cJSON_IsString(role) && cJSON_IsString(target_role) &&
+	       strcmp(role->valuestring, target_role->valuestring) == 0 &&
+	       json_integer_arrays_equal(cJSON_GetObjectItem(node, "path"),
+	                                 cJSON_GetObjectItem(target, "path")) &&
+	       cJSON_IsString(bus_name) && cJSON_IsString(target_bus) &&
+	       strcmp(bus_name->valuestring, target_bus->valuestring) == 0 &&
+	       cJSON_IsString(object_path) && cJSON_IsString(target_object) &&
+	       strcmp(object_path->valuestring, target_object->valuestring) == 0 &&
+	       cJSON_IsNumber(process_id) && cJSON_IsNumber(target_process) &&
+	       process_id->valuedouble == target_process->valuedouble;
+}
+
+static void find_semantic_locator(const cJSON *nodes, const cJSON *target,
+                                  const cJSON **match, int *match_count)
+{
+	const cJSON *node = NULL;
+	cJSON_ArrayForEach(node, nodes) {
+		if (semantic_node_matches_locator(node, target)) {
+			if (*match_count == 0) *match = node;
+			(*match_count)++;
+		}
+		find_semantic_locator(cJSON_GetObjectItem(node, "children"),
+		                      target, match, match_count);
+	}
+}
+
+static int semantic_action_is_listed(const cJSON *node, const char *action)
+{
+	const cJSON *actions = cJSON_GetObjectItem(node, "actions");
+	const cJSON *item = NULL;
+	cJSON_ArrayForEach(item, actions)
+		if (cJSON_IsString(item) && strcmp(item->valuestring, action) == 0)
+			return 1;
+	return 0;
+}
+
+static cJSON *semantic_press_error_result(const char *code,
+                                          const char *message,
+                                          int retry_recommended)
+{
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "code", code);
+	cJSON_AddStringToObject(payload, "message", message);
+	cJSON_AddBoolToObject(payload, "retryRecommended", retry_recommended);
+	cJSON *result = structured_text_result(payload, "semanticPressError");
+	cJSON_AddBoolToObject(result, "isError", 1);
+	return result;
+}
+
+cJSON *tool_agent_semantic_press(const cJSON *params)
+{
+	const char *capture_id = json_str(params, "captureId", NULL);
+	const char *action = json_str(params, "action", NULL);
+	const char *cursor_id = json_str(params, "cursorId", "primary");
+	const char *color = json_str(params, "color", "#36C5F0");
+	const char *label = json_str(params, "label", cursor_id);
+	const cJSON *target = cJSON_GetObjectItem(params, "target");
+	const cJSON *verify = cJSON_GetObjectItem(params, "verify");
+	int timeout_ms = json_int(params, "timeoutMs", 3000);
+	if (!capture_id || !capture_id[0] || !action || !action[0] ||
+	    !cJSON_IsObject(target) || !cJSON_IsObject(verify))
+		return mcp_tool_error_result(
+			"captureId, action, complete target locator, and verify are required");
+
+	DeskpalCapture capture;
+	int lookup = captures_lookup(capture_id, &capture);
+	if (lookup == -2)
+		return mcp_tool_error_result("captureId is stale; observe the app again");
+	if (lookup != 0 || capture.target != DESKPAL_CAPTURE_WINDOW)
+		return mcp_tool_error_result(
+			"captureId must come from a recent stable get_app_state observation");
+	if (!window_capture_still_valid(&capture))
+		return mcp_tool_error_result(
+			"Window capture target was replaced or its geometry changed; observe again");
+
+	cJSON *semantic = accessibility_tree_exact(NULL, capture.title,
+		8, 300, 0, 0, 0);
+	if (!semantic) return mcp_tool_error_result("Could not refresh semantic state");
+	filter_semantic_process(semantic, capture.process_id);
+	cJSON *transform = semantic_stage_transform(semantic, &(WindowInfo){
+		.id = capture.window_id,
+		.pid = capture.process_id,
+		.x = capture.window_x,
+		.y = capture.window_y,
+		.width = capture.window_width,
+		.height = capture.window_height,
+	});
+	const cJSON *supported = cJSON_GetObjectItem(transform, "supported");
+	if (!cJSON_IsTrue(supported)) {
+		cJSON_Delete(semantic);
+		cJSON *result = semantic_press_error_result(
+			"semantic_transform_unavailable",
+			"Fresh semantic bounds could not be verified against the captured window",
+			1);
+		cJSON_AddItemToObject(result, "semanticTransform", transform);
+		return result;
+	}
+
+	const cJSON *applications = cJSON_GetObjectItem(semantic, "applications");
+	const cJSON *application = cJSON_GetArrayItem(applications, 0);
+	const cJSON *windows = cJSON_GetObjectItem(application, "windows");
+	const cJSON *window = cJSON_GetArrayItem(windows, 0);
+	const cJSON *match = NULL;
+	int match_count = 0;
+	find_semantic_locator(cJSON_GetObjectItem(window, "nodes"),
+	                      target, &match, &match_count);
+	if (match_count != 1) {
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result(
+			match_count == 0 ? "Semantic target locator is stale or unavailable" :
+			"Semantic target locator is ambiguous");
+	}
+	if (!semantic_action_is_listed(match, action)) {
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result(
+			"Requested semantic action is not advertised by the fresh target");
+	}
+	const cJSON *bounds = cJSON_GetObjectItem(match, "bounds");
+	const cJSON *x = cJSON_GetObjectItem(bounds, "x");
+	const cJSON *y = cJSON_GetObjectItem(bounds, "y");
+	const cJSON *width = cJSON_GetObjectItem(bounds, "width");
+	const cJSON *height = cJSON_GetObjectItem(bounds, "height");
+	if (!cJSON_IsNumber(x) || !cJSON_IsNumber(y) ||
+	    !cJSON_IsNumber(width) || !cJSON_IsNumber(height) ||
+	    width->valuedouble <= 0 || height->valuedouble <= 0) {
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result("Fresh semantic target has no usable bounds");
+	}
+	double stage_x = (x->valuedouble + width->valuedouble / 2) *
+		cJSON_GetObjectItem(transform, "scaleX")->valuedouble +
+		cJSON_GetObjectItem(transform, "offsetX")->valuedouble;
+	double stage_y = (y->valuedouble + height->valuedouble / 2) *
+		cJSON_GetObjectItem(transform, "scaleY")->valuedouble +
+		cJSON_GetObjectItem(transform, "offsetY")->valuedouble;
+	int image_x = (int)lround((stage_x - capture.window_x) *
+	                         capture.image_width / capture.source_width);
+	int image_y = (int)lround((stage_y - capture.window_y) *
+	                         capture.image_height / capture.source_height);
+	if (image_x < 0 || image_x >= capture.image_width ||
+	    image_y < 0 || image_y >= capture.image_height) {
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result(
+			"Verified semantic target center falls outside the captured image");
+	}
+
+	cJSON *move_params = cJSON_CreateObject();
+	cJSON_AddStringToObject(move_params, "captureId", capture_id);
+	cJSON_AddNumberToObject(move_params, "x", image_x);
+	cJSON_AddNumberToObject(move_params, "y", image_y);
+	cJSON_AddStringToObject(move_params, "cursorId", cursor_id);
+	cJSON_AddStringToObject(move_params, "color", color);
+	cJSON_AddStringToObject(move_params, "label", label);
+	cJSON *move_result = tool_agent_cursor_move(move_params);
+	cJSON_Delete(move_params);
+	const cJSON *move_error = cJSON_GetObjectItem(move_result, "isError");
+	if (cJSON_IsTrue(move_error)) {
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return move_result;
+	}
+	cJSON *indicator_result = cJSON_Duplicate(
+		cJSON_GetObjectItem(move_result, "indicator"), 1);
+	cJSON_Delete(move_result);
+	if (!indicator_result) {
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result(
+			"Indicator move returned no verified structured result");
+	}
+	if (!window_capture_still_valid(&capture)) {
+		int hidden = 0;
+		int mutation_issued = 0;
+		int outcome_unknown = 0;
+		char hide_error[64];
+		(void)indicator_hide_owned(cursor_id, &hidden, &mutation_issued,
+		                           &outcome_unknown, hide_error,
+		                           sizeof(hide_error));
+		cJSON_Delete(indicator_result);
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result(
+			"Window geometry changed after cursor movement; semantic action was not issued");
+	}
+
+	const cJSON *locator = cJSON_GetObjectItem(match, "locator");
+	const char *application_name = json_str(locator, "application", NULL);
+	const char *window_name = json_str(locator, "window", NULL);
+	if (!application_name || !window_name) {
+		cJSON_Delete(indicator_result);
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result("Fresh semantic locator lacks exact scope names");
+	}
+	const cJSON *match_role = cJSON_GetObjectItem(match, "role");
+	const cJSON *match_name = cJSON_GetObjectItem(match, "name");
+	if (!cJSON_IsString(match_role) || !cJSON_IsString(match_name) ||
+	    !match_name->valuestring[0]) {
+		cJSON_Delete(indicator_result);
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result(
+			"Fresh semantic press target requires a non-empty accessible name");
+	}
+	/* AT-SPI object paths can be replaced as toolkit proxies are recreated.
+	 * The complete capture locator above proves which fresh node was intended;
+	 * dispatch by its exact role/name so accessibility_action can re-resolve it
+	 * immediately, reject ambiguity, and verify replacement before mutation. */
+	cJSON *action_target = cJSON_CreateObject();
+	cJSON_AddStringToObject(action_target, "role", match_role->valuestring);
+	cJSON_AddStringToObject(action_target, "name", match_name->valuestring);
+	cJSON *action_params = cJSON_CreateObject();
+	cJSON_AddStringToObject(action_params, "application", application_name);
+	cJSON_AddStringToObject(action_params, "window", window_name);
+	cJSON_AddItemToObject(action_params, "target", action_target);
+	cJSON_AddStringToObject(action_params, "operation", "invoke");
+	cJSON_AddStringToObject(action_params, "action", action);
+	cJSON_AddItemToObject(action_params, "verify", cJSON_Duplicate(verify, 1));
+	cJSON_AddNumberToObject(action_params, "timeoutMs", timeout_ms);
+	unsigned long focus_before = x11_get_active_window();
+	cJSON *action_result = accessibility_action(action_params);
+	unsigned long focus_after = x11_get_active_window();
+	cJSON_Delete(action_params);
+	if (!action_result) {
+		cJSON_Delete(indicator_result);
+		cJSON_Delete(semantic);
+		cJSON_Delete(transform);
+		return mcp_tool_error_result("AT-SPI action returned no result");
+	}
+
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "route", "atspi");
+	cJSON_AddStringToObject(payload, "captureId", capture_id);
+	cJSON_AddBoolToObject(payload, "indicatorMoved", 1);
+	cJSON_AddBoolToObject(payload, "sharedPointerMoved", 0);
+	cJSON_AddBoolToObject(payload, "mutationIssued",
+	                     cJSON_IsTrue(cJSON_GetObjectItem(action_result,
+	                                                   "mutationIssued")));
+	cJSON_AddBoolToObject(payload, "actionOutcomeUnknown",
+	                     cJSON_IsTrue(cJSON_GetObjectItem(action_result,
+	                                                   "actionOutcomeUnknown")));
+	cJSON_AddBoolToObject(payload, "actionApplied",
+	                     cJSON_IsTrue(cJSON_GetObjectItem(action_result,
+	                                                   "actionApplied")));
+	cJSON_AddBoolToObject(payload, "inputDelivered",
+	                     cJSON_IsTrue(cJSON_GetObjectItem(action_result,
+	                                                   "actionApplied")));
+	int focus_known = focus_before != 0 && focus_after != 0;
+	cJSON_AddBoolToObject(payload, "focusKnown", focus_known);
+	if (focus_known)
+		cJSON_AddBoolToObject(payload, "focusChanged", focus_before != focus_after);
+	else
+		cJSON_AddNullToObject(payload, "focusChanged");
+	cJSON_AddNullToObject(payload, "stackingChanged");
+	cJSON_AddBoolToObject(payload, "stackingChangeUnknown", 1);
+	cJSON_AddBoolToObject(payload, "clipboardChanged", 0);
+	cJSON_AddItemToObject(payload, "indicator", indicator_result);
+	cJSON_AddItemToObject(payload, "semanticTransform", transform);
+	cJSON_AddItemToObject(payload, "semanticTarget", cJSON_Duplicate(match, 1));
+	cJSON_AddItemToObject(payload, "action", action_result);
+	int verified = cJSON_IsTrue(cJSON_GetObjectItem(action_result, "verified"));
+	cJSON_AddBoolToObject(payload, "verified", verified);
+	cJSON_Delete(semantic);
+	cJSON *result = structured_text_result(payload, "semanticPress");
+	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
+	return result;
+}
+
 /* ── environment status ──────────────────────────────────────────────────── */
 
 static cJSON *environment_capability(int available, const char *backend,
@@ -1242,6 +1555,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	int indicator_available = indicator_status != NULL;
 	int indicator_single_monitor = indicator_available &&
 		indicator_has_single_full_stage_monitor(indicator_status);
+	int semantic_press_available = !headless && semantic_available &&
+		indicator_single_monitor;
 
 	cJSON *payload = cJSON_CreateObject();
 	cJSON_AddStringToObject(payload, "scope", headless ? "isolated" : "visible-desktop");
@@ -1261,6 +1576,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                      keyboard_uinput ? "uinput-and-xtest" : "xtest");
 	cJSON_AddStringToObject(backends, "indicator",
 	                      indicator_available ? "gnome-shell-dbus" : "unavailable");
+	cJSON_AddStringToObject(backends, "semanticPress",
+	                      semantic_press_available ? "atspi-with-agent-cursor" : "unavailable");
 	cJSON_AddItemToObject(payload, "selectedBackends", backends);
 
 	cJSON *capabilities = cJSON_CreateObject();
@@ -1284,6 +1601,10 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                     environment_capability(indicator_available,
 	                         indicator_available ? "gnome-shell-dbus" : "unavailable",
 	                         0, indicator_available));
+	cJSON_AddItemToObject(capabilities, "semanticPress",
+	                     environment_capability(semantic_press_available,
+	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
+	                         0, 0));
 	cJSON_AddItemToObject(capabilities, "nativeWaylandSurfaceControl",
 	                     environment_capability(0, "unavailable", 0, 0));
 	cJSON_AddItemToObject(capabilities, "backgroundPixelInput",
@@ -3332,6 +3653,40 @@ void tools_register_all(void)
 		"  }"
 		"}",
 		tool_agent_cursor_hide);
+
+	mcp_register_tool("agent_semantic_press",
+		"Move this process's logical cursor to a freshly re-resolved accessible control from a stable get_app_state capture, invoke one advertised AT-SPI action, and verify an explicit postcondition. Never falls back to shared-pointer input. Complete path locators require busName, objectPath, and processId.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"target\": {\"type\": \"object\", \"properties\": {"
+		"      \"role\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"      \"path\": {\"type\": \"array\", \"maxItems\": 32, \"items\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 4096}},"
+		"      \"busName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255},"
+		"      \"objectPath\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 1024},"
+		"      \"processId\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 2147483647}"
+		"    }, \"required\": [\"role\", \"path\", \"busName\", \"objectPath\", \"processId\"]},"
+		"    \"action\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"    \"verify\": {\"type\": \"object\", \"properties\": {"
+		"      \"role\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"      \"name\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 512},"
+		"      \"path\": {\"type\": \"array\", \"maxItems\": 32, \"items\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 4096}},"
+		"      \"busName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255},"
+		"      \"objectPath\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 1024},"
+		"      \"processId\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 2147483647},"
+		"      \"textEquals\": {\"type\": \"string\", \"maxLength\": 2048},"
+		"      \"state\": {\"type\": \"string\", \"enum\": [\"focused\", \"checked\", \"selected\", \"enabled\", \"editable\", \"showing\"]},"
+		"      \"stateValue\": {\"type\": \"boolean\"}"
+		"    }, \"required\": [\"role\"], \"anyOf\": [{\"required\": [\"name\"]}, {\"required\": [\"path\"]}], \"allOf\": [{\"if\": {\"required\": [\"path\"]}, \"then\": {\"required\": [\"busName\", \"objectPath\", \"processId\"]}}, {\"anyOf\": [{\"required\": [\"textEquals\"]}, {\"required\": [\"state\", \"stateValue\"]}]}]},"
+		"    \"cursorId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 40, \"default\": \"primary\"},"
+		"    \"color\": {\"type\": \"string\", \"pattern\": \"^#[0-9A-Fa-f]{6}$\", \"default\": \"#36C5F0\"},"
+		"    \"label\": {\"type\": \"string\", \"maxLength\": 48},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 3000}"
+		"  },"
+		"  \"required\": [\"captureId\", \"target\", \"action\", \"verify\"]"
+		"}",
+		tool_agent_semantic_press);
 
 	mcp_register_tool("list_windows",
 		"List top-level application windows on the user's desktop by default, or in an isolated verification session when sessionId is supplied. Set includeAll for recursive helper/dialog discovery.",

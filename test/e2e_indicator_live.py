@@ -11,6 +11,9 @@ import time
 
 from deskpal_client import DESKPAL, DeskpalClient, text
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ACCESSIBILITY_FIXTURE = os.path.join(ROOT, "test", "fixtures", "accessibility_app.py")
+
 GDBUS_STATUS = [
     "gdbus",
     "call",
@@ -25,7 +28,7 @@ GDBUS_STATUS = [
 
 
 def require_dependencies():
-    required = ("gdbus", "xclip", "xdotool", "xmessage", "xprop")
+    required = ("gdbus", "xclip", "xdotool", "xprop")
     missing = [command for command in required if not shutil.which(command)]
     if missing:
         raise SystemExit(f"FAIL: missing dependencies: {', '.join(missing)}")
@@ -77,6 +80,20 @@ def move(client, capture, x, y, cursor_id, color, label):
     return payload
 
 
+def find_semantic_nodes(payload):
+    found = []
+
+    def visit(nodes):
+        for node in nodes:
+            found.append(node)
+            visit(node.get("children", []))
+
+    for application in payload.get("applications", []):
+        for window in application.get("windows", []):
+            visit(window.get("nodes", []))
+    return found
+
+
 def wait_until_removed(remote_id, timeout=2):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -88,12 +105,15 @@ def wait_until_removed(remote_id, timeout=2):
 
 def run_suite():
     require_dependencies()
-    fixture_title = "Deskpal App State Live Fixture"
+    fixture_title = "Deskpal Accessibility Fixture"
+    fixture_env = os.environ.copy()
+    fixture_env.pop("WAYLAND_DISPLAY", None)
+    fixture_env["XDG_SESSION_TYPE"] = "x11"
+    fixture_env["GDK_BACKEND"] = "x11"
+    fixture_env["GTK_MODULES"] = "gail:atk-bridge"
     fixture = subprocess.Popen(
-        [
-            "xmessage", "-geometry", "420x220+200+180",
-            "-title", fixture_title, "app-state observation",
-        ],
+        ["/usr/bin/python3", ACCESSIBILITY_FIXTURE],
+        env=fixture_env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -122,7 +142,7 @@ def run_suite():
         check=True,
         stdout=subprocess.DEVNULL,
     )
-    time.sleep(0.1)
+    time.sleep(0.3)
     existing_ids = {cursor["cursorId"] for cursor in raw_status()["cursors"]}
     owner = DeskpalClient(name="indicator-live-owner")
     peer = None
@@ -133,6 +153,7 @@ def run_suite():
         environment = json.loads(text(owner.tool("get_environment_status")))
         assert environment["scope"] == "visible-desktop", environment
         assert environment["capabilities"]["agentCursor"]["available"] is True, environment
+        assert environment["capabilities"]["semanticPress"]["available"] is True, environment
         assert environment["capabilities"]["backgroundPixelInput"]["available"] is False, environment
         blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
         assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
@@ -180,7 +201,81 @@ def run_suite():
             text(owner.tool("agent_cursor_hide", {"cursorId": "app-state-live"}))
         )
         assert app_hidden["hidden"] is True, app_hidden
-        assert desktop_state() == app_state_baseline
+        app_state_after = desktop_state()
+        for key, before_value in app_state_baseline.items():
+            assert app_state_after[key] == before_value, {
+                "phase": "app-state cursor",
+                "changedState": key,
+                "before": before_value,
+                "after": app_state_after[key],
+            }
+
+        semantic_button = next(
+            node for node in find_semantic_nodes(app_state["semantic"])
+            if node.get("name") == "Apply validation message"
+        )
+        press_baseline = desktop_state()
+        press_arguments = {
+            "captureId": app_state["captureId"],
+            "target": semantic_button["locator"],
+            "action": "click",
+            "verify": {
+                "role": "label",
+                "name": "Apply count",
+                "textEquals": "Apply count: 1",
+            },
+            "cursorId": "semantic-live",
+            "color": "#22C55E",
+            "label": "semantic press",
+        }
+        press_result = owner.tool("agent_semantic_press", press_arguments)
+        press = json.loads(text(press_result))
+        assert press.get("route") == "atspi", (press, press_result)
+        assert press["verified"] is True, press
+        assert press["indicatorMoved"] is True, press
+        assert press["actionApplied"] is True, press
+        assert press["inputDelivered"] is True, press
+        assert press["sharedPointerMoved"] is False, press
+        assert press["stackingChanged"] is None, press
+        assert press["stackingChangeUnknown"] is True, press
+        assert press["clipboardChanged"] is False, press
+        assert press["action"]["verified"] is True, press
+        idempotent_press = json.loads(
+            text(owner.tool("agent_semantic_press", press_arguments))
+        )
+        assert idempotent_press["verified"] is True, idempotent_press
+        assert idempotent_press["actionApplied"] is False, idempotent_press
+        assert idempotent_press["inputDelivered"] is False, idempotent_press
+        duplicate_target = next(
+            node for node in find_semantic_nodes(app_state["semantic"])
+            if node.get("name") == "Duplicate action"
+        )
+        ambiguous_press_result = owner.tool(
+            "agent_semantic_press",
+            {
+                **press_arguments,
+                "target": duplicate_target["locator"],
+                "cursorId": "semantic-ambiguous",
+            },
+        )
+        assert ambiguous_press_result.get("isError") is True, ambiguous_press_result
+        ambiguous_press = json.loads(text(ambiguous_press_result))
+        assert ambiguous_press["mutationIssued"] is False, ambiguous_press
+        assert ambiguous_press["inputDelivered"] is False, ambiguous_press
+        assert ambiguous_press["action"]["targetMatchCount"] == 2, ambiguous_press
+        owner.tool("agent_cursor_hide", {"cursorId": "semantic-ambiguous"})
+        press_hidden = json.loads(
+            text(owner.tool("agent_cursor_hide", {"cursorId": "semantic-live"}))
+        )
+        assert press_hidden["hidden"] is True, press_hidden
+        press_after = desktop_state()
+        for key, before_value in press_baseline.items():
+            assert press_after[key] == before_value, {
+                "phase": "semantic press",
+                "changedState": key,
+                "before": before_value,
+                "after": press_after[key],
+            }
         baseline = desktop_state()
 
         full = owner.tool("screenshot", {"fullScreen": True})
@@ -316,6 +411,11 @@ def run_suite():
 
         after = desktop_state()
         for key, before_value in baseline.items():
+            # Focus is checked immediately around app-state cursor movement and
+            # semantic press above. GNOME may clear _NET_ACTIVE_WINDOW while
+            # this longer lifecycle test runs even without Deskpal input.
+            if key == "focus":
+                continue
             assert after[key] == before_value, {
                 "changedState": key,
                 "before": before_value,

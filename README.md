@@ -178,6 +178,11 @@ On GNOME 42, the optional logical-cursor extension adds
 short-lived `captureId` and image-pixel coordinates to the move tool. The
 indicator is visual only: results explicitly report `inputDelivered: false`.
 Installation and acceptance steps are in [docs/gnome-indicator.md](docs/gnome-indicator.md).
+For accessible controls, `deskpal_agent_semantic_press` connects a stable app
+observation, logical-cursor motion, verified AT-SPI invocation, and an explicit
+postcondition without shared-pointer fallback; see
+[docs/semantic-actions.md](docs/semantic-actions.md) for its contract and
+limitations.
 
 ### Goal-aware isolation
 

@@ -223,6 +223,10 @@ def run_rich_suite(env):
         app_state_entry = next(
             node for node in app_state_nodes if node["name"] == "Validation message"
         )
+        app_state_button = next(
+            node for node in app_state_nodes
+            if node["name"] == "Apply validation message"
+        )
         entry_bounds = app_state_entry["bounds"]
         entry_stage_x = (
             (entry_bounds["x"] + entry_bounds["width"] / 2)
@@ -346,6 +350,59 @@ def run_rich_suite(env):
                 node["text"] for node in find_nodes(snapshot)
                 if node["name"] == name
             )
+
+        invalid_press_action = client.tool(
+            "agent_semantic_press",
+            {
+                "captureId": app_state["captureId"],
+                "target": app_state_button["locator"],
+                "action": "not-advertised",
+                "verify": {
+                    "role": "label",
+                    "name": "Apply count",
+                    "textEquals": "Apply count: 1",
+                },
+            },
+        )
+        assert invalid_press_action.get("isError") is True
+        assert "not advertised" in text(invalid_press_action)
+        assert visible_text("Apply count") == "Apply count: 0"
+
+        stale_locator = json.loads(json.dumps(app_state_button["locator"]))
+        stale_locator["path"][-1] += 100
+        stale_press = client.tool(
+            "agent_semantic_press",
+            {
+                "captureId": app_state["captureId"],
+                "target": stale_locator,
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Apply count",
+                    "textEquals": "Apply count: 1",
+                },
+            },
+        )
+        assert stale_press.get("isError") is True
+        assert "stale or unavailable" in text(stale_press)
+        assert visible_text("Apply count") == "Apply count: 0"
+
+        unavailable_indicator_press = client.tool(
+            "agent_semantic_press",
+            {
+                "captureId": app_state["captureId"],
+                "target": app_state_button["locator"],
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "Apply count",
+                    "textEquals": "Apply count: 1",
+                },
+            },
+        )
+        assert unavailable_indicator_press.get("isError") is True
+        assert "indicator" in text(unavailable_indicator_press).lower()
+        assert visible_text("Apply count") == "Apply count: 0"
 
         set_text_result = client.tool(
             "accessibility_action",
@@ -1158,6 +1215,28 @@ def run_rich_suite(env):
         )
         assert routed_action.get("isError") is True, routed_action
         assert "visible desktop only" in text(routed_action), routed_action
+        routed_press = client.tool(
+            "agent_semantic_press",
+            {
+                "sessionId": isolated_id,
+                "captureId": "capture-dummy",
+                "target": {
+                    "role": "push button",
+                    "path": [0],
+                    "busName": ":1.1",
+                    "objectPath": "/dummy",
+                    "processId": 1,
+                },
+                "action": "click",
+                "verify": {
+                    "role": "label",
+                    "name": "dummy",
+                    "textEquals": "dummy",
+                },
+            },
+        )
+        assert routed_press.get("isError") is True, routed_press
+        assert "visible desktop only" in text(routed_press), routed_press
         client.tool("close_isolated_session", {"sessionId": isolated_id})
 
         direct_env = env.copy()
@@ -1328,6 +1407,7 @@ def main():
                     "get_accessibility_tree",
                     "get_focused_element",
                     "accessibility_action",
+                    "agent_semantic_press",
                 ):
                     tool = tool_by_name(tools, name)
                     assert "sessionId" not in tool["inputSchema"]["properties"], tool
@@ -1361,6 +1441,16 @@ def main():
                 assert {
                     "busName", "objectPath", "processId"
                 }.issubset(target_conditions[0]["then"]["required"])
+                press_schema = tool_by_name(
+                    tools, "agent_semantic_press"
+                )["inputSchema"]
+                assert press_schema["required"] == [
+                    "captureId", "target", "action", "verify"
+                ]
+                assert set(press_schema["properties"]["target"]["required"]) == {
+                    "role", "path", "busName", "objectPath", "processId"
+                }
+                assert press_schema["properties"]["timeoutMs"]["default"] == 3000
                 verify_conditions = action_schema["properties"]["verify"]["allOf"]
                 assert {
                     "busName", "objectPath", "processId"

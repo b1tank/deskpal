@@ -46,7 +46,8 @@ void mcp_register_tool(const char *name, const char *description,
 	    strcmp(name, "accessibility_status") != 0 &&
 	    strcmp(name, "get_accessibility_tree") != 0 &&
 	    strcmp(name, "get_focused_element") != 0 &&
-	    strcmp(name, "accessibility_action") != 0) {
+	    strcmp(name, "accessibility_action") != 0 &&
+	    strcmp(name, "agent_semantic_press") != 0) {
 		cJSON *properties = cJSON_GetObjectItem(schema, "properties");
 		if (properties && cJSON_IsObject(properties) &&
 		    !cJSON_GetObjectItem(properties, "sessionId")) {
@@ -458,6 +459,45 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 			}
 		}
 	}
+	if (strcmp(tool_name, "agent_semantic_press") == 0) {
+		if (!bounded_string_if_present(arguments, "captureId", 63) ||
+		    !cJSON_GetObjectItem(arguments, "captureId") ||
+		    !bounded_string_if_present(arguments, "action", 128) ||
+		    !cJSON_GetObjectItem(arguments, "action") ||
+		    !bounded_string_if_present(arguments, "cursorId", 40) ||
+		    !bounded_string_if_present(arguments, "color", 7) ||
+		    !bounded_string_if_present(arguments, "label", 48) ||
+		    !integer_in_range(arguments, "timeoutMs", 1, 5000))
+			return mcp_tool_error_result(
+				"agent_semantic_press has invalid capture, action, cursor style, or timeout fields");
+		const cJSON *target = cJSON_GetObjectItem(arguments, "target");
+		if (!valid_accessibility_selector(target) ||
+		    !cJSON_GetObjectItem(target, "path"))
+			return mcp_tool_error_result(
+				"target requires role, path, busName, objectPath, and processId");
+		const cJSON *verify = cJSON_GetObjectItem(arguments, "verify");
+		if (!valid_accessibility_selector(verify))
+			return mcp_tool_error_result(
+				"verify requires role and a non-empty name or complete path");
+		const cJSON *text_equals = cJSON_GetObjectItem(verify, "textEquals");
+		const cJSON *state = cJSON_GetObjectItem(verify, "state");
+		const cJSON *state_value = cJSON_GetObjectItem(verify, "stateValue");
+		if (!text_equals && !state)
+			return mcp_tool_error_result(
+				"verify requires textEquals and/or state");
+		if (text_equals && (!cJSON_IsString(text_equals) ||
+		    strlen(text_equals->valuestring) > 2048))
+			return mcp_tool_error_result(
+				"verify.textEquals must be a string of at most 2048 bytes");
+		if (state && (!cJSON_IsString(state) ||
+		    !valid_accessibility_state(state->valuestring) ||
+		    !state_value || !cJSON_IsBool(state_value)))
+			return mcp_tool_error_result(
+				"verify.state requires a supported state and boolean stateValue");
+		if (state_value && !state)
+			return mcp_tool_error_result(
+				"verify.stateValue is only valid with verify.state");
+	}
 	if (strcmp(tool_name, "type_text") == 0) {
 		if (!integer_in_range(arguments, "delay", 0, 1000))
 			return mcp_tool_error_result("delay must be an integer between 0 and 1000 ms");
@@ -525,12 +565,14 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "accessibility_status") != 0 &&
 		strcmp(tool_name, "get_accessibility_tree") != 0 &&
 		strcmp(tool_name, "get_focused_element") != 0 &&
-		strcmp(tool_name, "accessibility_action") != 0;
+		strcmp(tool_name, "accessibility_action") != 0 &&
+		strcmp(tool_name, "agent_semantic_press") != 0;
 	if (session_id && !session_routable &&
 	    (strcmp(tool_name, "accessibility_status") == 0 ||
 	     strcmp(tool_name, "get_accessibility_tree") == 0 ||
 	     strcmp(tool_name, "get_focused_element") == 0 ||
-	     strcmp(tool_name, "accessibility_action") == 0))
+	     strcmp(tool_name, "accessibility_action") == 0 ||
+	     strcmp(tool_name, "agent_semantic_press") == 0))
 		return mcp_tool_error_result(
 			"Accessibility tools inspect the visible desktop only; sessionId is not supported");
 	if (session_id && session_routable &&

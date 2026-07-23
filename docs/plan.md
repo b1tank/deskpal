@@ -109,6 +109,8 @@ broker actions will drive.
       focus, app/surface identity, scale transform, and capture ID.
 - [ ] Expand verified semantic press, selection, value, text-range, scroll,
       menu, toggle, and expandable-control operations.
+  - [x] Ship capture-bound verified [`agent_semantic_press`](semantic-actions.md)
+        with logical-cursor motion and no shared-pointer fallback.
 - [ ] Test an explicit, user-approved session accessibility setup that lets
       already-running Chromium/Electron apps expose rich AT-SPI trees. Never
       change the setting silently.

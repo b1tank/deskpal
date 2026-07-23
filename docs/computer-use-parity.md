@@ -28,7 +28,7 @@ compatibility mechanisms differ from that plan, `plan.md` is authoritative.
 | Launch and focus applications | Yes | Yes | Parity |
 | Resize windows | Yes | Yes | Parity |
 | Window/app discovery | Approved apps only | EWMH top-level windows with `WM_CLASS`; `includeAll` for recursive dialog/helper discovery | Different, now cleaner |
-| Semantic element discovery/action | Native app accessibility integration | Bounded AT-SPI tree/focus inspection plus verified `setText`, `focus`, and named actions when apps expose rich accessibility | Partial parity |
+| Semantic element discovery/action | Native app accessibility integration | Bounded AT-SPI tree/focus inspection, verified `setText`/`focus`/named actions, and capture-bound `agent_semantic_press` with logical-cursor motion and no shared-pointer fallback | Partial parity |
 | One controller at a time | Machine-wide session lock | Lazy per-user machine lock for visible-desktop mutations | Parity for arbitration |
 | Stop current action | Global Esc or Ctrl+C | Client cancellation/stdio shutdown and per-tool timeouts | Missing global hotkey |
 | App approval | Prompt once per app/session | MCP-host approval only; no per-app prompt | Missing |
@@ -51,7 +51,10 @@ compatibility mechanisms differ from that plan, `plan.md` is authoritative.
   interaction architecture.
 - **Semantic backend:** optional AT-SPI inspection and verified actions for
   accessible controls. Locators are short-lived and re-resolved before every
-  mutation; protected/ambiguous/incomplete targets fail closed.
+  mutation; protected/ambiguous/incomplete targets fail closed. The first
+  cursor-coupled press route is limited to exact X11/Xwayland identity,
+  one-monitor transform verification, named accessible controls, and explicit
+  postconditions; see [semantic-actions.md](semantic-actions.md).
 - **Private backend:** child deskpal server under Xvfb, routed by `sessionId`.
 - **App identity:** `_NET_CLIENT_LIST`, title, `WM_CLASS`, PID, geometry.
 - **Arbitration:** first visible-desktop mutation or process launch acquires a
