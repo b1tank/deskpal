@@ -165,7 +165,9 @@ DESKPAL_PI_ALLOW_EXEC=1 DESKPAL_PI_ALLOW_FS=1 pi -e ./extensions/deskpal.ts
 ```
 
 Use `/deskpal-status` to verify the bridge. The extension closes the server and
-its isolated sessions when the Pi session shuts down.
+its isolated sessions when the Pi session shuts down. Before choosing a desktop
+interaction route, call `deskpal_get_environment_status` to inspect active
+backends, blockers, shared-seat risks, and concrete setup actions.
 
 On GNOME 42, the optional logical-cursor extension adds
 `deskpal_agent_cursor_status`, `deskpal_agent_cursor_move`, and

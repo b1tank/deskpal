@@ -761,6 +761,150 @@ cJSON *tool_agent_cursor_hide(const cJSON *params)
 	return result;
 }
 
+/* ── environment status ──────────────────────────────────────────────────── */
+
+static cJSON *environment_capability(int available, const char *backend,
+                                     int shared_seat, int non_interfering)
+{
+	cJSON *capability = cJSON_CreateObject();
+	cJSON_AddBoolToObject(capability, "available", available);
+	cJSON_AddStringToObject(capability, "backend", backend);
+	cJSON_AddBoolToObject(capability, "sharedSeat", shared_seat);
+	cJSON_AddBoolToObject(capability, "nonInterfering", non_interfering);
+	return capability;
+}
+
+static void add_environment_notice(cJSON *array, const char *id,
+                                   const char *severity, const char *message)
+{
+	cJSON *notice = cJSON_CreateObject();
+	cJSON_AddStringToObject(notice, "id", id);
+	if (severity) cJSON_AddStringToObject(notice, "severity", severity);
+	cJSON_AddStringToObject(notice, "message", message);
+	cJSON_AddItemToArray(array, notice);
+}
+
+cJSON *tool_get_environment_status(const cJSON *params)
+{
+	(void)params;
+	int headless = getenv("DESKPAL_HEADLESS_ACTIVE") != NULL;
+	int wayland = x11_is_wayland();
+	int pointer_uinput = uinput_available();
+	int keyboard_uinput = uinput_kbd_available();
+	int semantic_available = accessibility_available();
+	int ocr_enabled = ocr_available();
+
+	char indicator_error[256] = {0};
+	cJSON *indicator_status = owned_indicator_status(
+		indicator_error, sizeof(indicator_error));
+	int indicator_available = indicator_status != NULL;
+	int indicator_single_monitor = indicator_available &&
+		indicator_has_single_full_stage_monitor(indicator_status);
+
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "scope", headless ? "isolated" : "visible-desktop");
+	cJSON_AddStringToObject(payload, "displayServer", wayland ? "wayland-xwayland" : "x11");
+	cJSON_AddBoolToObject(payload, "sharedSeat", !headless);
+
+	const char *window_backend = wayland ? "x11-xwayland" : "x11";
+	const char *capture_backend = headless ? "x11" : "x11-with-host-fallback";
+	cJSON *backends = cJSON_CreateObject();
+	cJSON_AddStringToObject(backends, "windowDiscovery", window_backend);
+	cJSON_AddStringToObject(backends, "capture", capture_backend);
+	cJSON_AddStringToObject(backends, "semantic",
+	                      semantic_available ? "atspi" : "unavailable");
+	cJSON_AddStringToObject(backends, "pointer",
+	                      pointer_uinput ? "uinput-and-xtest" : "xtest");
+	cJSON_AddStringToObject(backends, "keyboard",
+	                      keyboard_uinput ? "uinput-and-xtest" : "xtest");
+	cJSON_AddStringToObject(backends, "indicator",
+	                      indicator_available ? "gnome-shell-dbus" : "unavailable");
+	cJSON_AddItemToObject(payload, "selectedBackends", backends);
+
+	cJSON *capabilities = cJSON_CreateObject();
+	cJSON_AddItemToObject(capabilities, "windowDiscovery",
+	                     environment_capability(1, window_backend, 0, 1));
+	cJSON_AddItemToObject(capabilities, "capture",
+	                     environment_capability(1, capture_backend, 0, 1));
+	cJSON_AddItemToObject(capabilities, "pointerInput",
+	                     environment_capability(1,
+	                         pointer_uinput ? "uinput-and-xtest" : "xtest",
+	                         !headless, headless));
+	cJSON_AddItemToObject(capabilities, "keyboardInput",
+	                     environment_capability(1,
+	                         keyboard_uinput ? "uinput-and-xtest" : "xtest",
+	                         !headless, headless));
+	cJSON_AddItemToObject(capabilities, "semantic",
+	                     environment_capability(semantic_available, "atspi", 0, 0));
+	cJSON_AddItemToObject(capabilities, "ocr",
+	                     environment_capability(ocr_enabled, "tesseract", 0, 1));
+	cJSON_AddItemToObject(capabilities, "agentCursor",
+	                     environment_capability(indicator_available,
+	                         indicator_available ? "gnome-shell-dbus" : "unavailable",
+	                         0, indicator_available));
+	cJSON_AddItemToObject(capabilities, "nativeWaylandSurfaceControl",
+	                     environment_capability(0, "unavailable", 0, 0));
+	cJSON_AddItemToObject(capabilities, "backgroundPixelInput",
+	                     environment_capability(0, "unavailable", 0, 0));
+	cJSON_AddItemToObject(capabilities, "processLaunch",
+	                     environment_capability(deskpal_allow_exec, "deskpal-exec-gate", 0, headless));
+	cJSON_AddItemToObject(capabilities, "filesystem",
+	                     environment_capability(deskpal_allow_fs, "deskpal-fs-gate", 0, 1));
+	cJSON_AddItemToObject(capabilities, "accessibilityStatus", accessibility_status());
+	if (indicator_status)
+		cJSON_AddItemToObject(capabilities, "agentCursorStatus", indicator_status);
+	cJSON_AddItemToObject(payload, "capabilities", capabilities);
+
+	cJSON *blockers = cJSON_CreateArray();
+	if (!headless)
+		add_environment_notice(blockers, "non_interfering_pixel_input_unavailable",
+			"high", "No trusted compositor broker is installed; generic pointer and keyboard tools use the human's shared seat.");
+	if (wayland)
+		add_environment_notice(blockers, "native_wayland_surface_control_unavailable",
+			"high", "The compatibility desktop backend can control X11/Xwayland surfaces but not arbitrary native Wayland surfaces.");
+	if (!semantic_available)
+		add_environment_notice(blockers, "atspi_unavailable", "medium",
+			"Verified semantic inspection and actions are unavailable in this process.");
+	if (!headless && !indicator_available)
+		add_environment_notice(blockers, "agent_cursor_unavailable", "medium",
+			indicator_error[0] ? indicator_error : "The GNOME logical-cursor service is unavailable.");
+	else if (!headless && !indicator_single_monitor)
+		add_environment_notice(blockers, "agent_cursor_monitor_layout_unsupported",
+			"medium", "Capture-bound cursor movement currently requires one monitor covering the full GNOME stage.");
+	if (!deskpal_allow_exec)
+		add_environment_notice(blockers, "process_launch_disabled", "low",
+			"Process-launch tools are disabled until Deskpal starts with --allow-exec.");
+	cJSON_AddItemToObject(payload, "blockers", blockers);
+
+	cJSON *risks = cJSON_CreateArray();
+	if (!headless) {
+		add_environment_notice(risks, "shared_pointer", "high",
+			"mouse_move, click, drag, and scroll may move or use the human's logical pointer.");
+		add_environment_notice(risks, "focus_and_stacking", "high",
+			"Compatibility actions may focus or raise X11/Xwayland windows.");
+		add_environment_notice(risks, "global_clipboard", "medium",
+			"Clipboard tools read or replace the desktop session clipboard.");
+	}
+	cJSON_AddItemToObject(payload, "risks", risks);
+
+	cJSON *setup = cJSON_CreateArray();
+	if (!headless && !indicator_available)
+		add_environment_notice(setup, "install_agent_cursor", NULL,
+			"On supported GNOME 42 systems, run npm run indicator:install, log out and back in, then run scripts/indicator.sh enable.");
+	if (!semantic_available)
+		add_environment_notice(setup, "enable_accessibility", NULL,
+			"Install the AT-SPI runtime and explicitly enable the target application's accessibility support; never change it silently.");
+	if (!deskpal_allow_exec)
+		add_environment_notice(setup, "enable_process_launch", NULL,
+			"Restart Deskpal with --allow-exec only when arbitrary process execution is intended.");
+	if (!headless)
+		add_environment_notice(setup, "prefer_non_interfering_routes", NULL,
+			"Prefer app APIs and verified AT-SPI actions; use launch_isolated_app for disposable GUI work until a compositor broker is available.");
+	cJSON_AddItemToObject(payload, "setupActions", setup);
+
+	return structured_text_result(payload, "environment");
+}
+
 /* ── list_windows ────────────────────────────────────────────────────────── */
 
 cJSON *tool_list_windows(const cJSON *params)
@@ -2686,6 +2830,14 @@ void tools_register_all(void)
 		"  }"
 		"}",
 		tool_screenshot);
+
+	mcp_register_tool("get_environment_status",
+		"Report the current Deskpal scope, selected backends, capabilities, blockers, shared-seat risks, and concrete setup actions. Use this before choosing a visible-desktop interaction route.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {}"
+		"}",
+		tool_get_environment_status);
 
 	mcp_register_tool("agent_cursor_status",
 		"Report GNOME logical-cursor availability, stage and monitor geometry, and only the cursors owned by this Deskpal process. Indicator state is visual metadata, not proof of delivered input.",

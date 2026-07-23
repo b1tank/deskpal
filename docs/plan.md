@@ -103,7 +103,7 @@ broker actions will drive.
 - [x] Ship the native Pi extension with typed tools and persistent lifecycle.
 - [x] Ship the capture-bound, session-owned agent-cursor milestone defined
       above, including truthful side-effect reporting and shutdown cleanup.
-- [ ] Add `get_environment_status`: capabilities, selected backends, blockers,
+- [x] Add `get_environment_status`: capabilities, selected backends, blockers,
       shared-seat risks, and concrete setup actions.
 - [ ] Add unified `get_app_state`: image, compact semantic state, focus,
       app/surface identity, scale transform, and capture ID.

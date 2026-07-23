@@ -87,6 +87,7 @@ def run_suite():
             list_schema = tool_by_name(tools, "list_windows")["inputSchema"]
             launch_schema = tool_by_name(tools, "launch_app")["inputSchema"]
             cursor_move_schema = tool_by_name(tools, "agent_cursor_move")["inputSchema"]
+            environment_schema = tool_by_name(tools, "get_environment_status")["inputSchema"]
             tool_by_name(tools, "agent_cursor_status")
             tool_by_name(tools, "agent_cursor_hide")
             assert "maxWidth" in screenshot_schema["properties"]
@@ -95,6 +96,25 @@ def run_suite():
             assert "forceX11" in launch_schema["properties"]
             assert cursor_move_schema["required"] == ["captureId", "x", "y"]
             assert cursor_move_schema["properties"]["x"]["type"] == "integer"
+            assert "sessionId" in environment_schema["properties"]
+
+            environment = json.loads(text(client.tool("get_environment_status")))
+            assert environment["scope"] == "visible-desktop", environment
+            assert environment["displayServer"] == "x11", environment
+            assert environment["sharedSeat"] is True, environment
+            assert environment["selectedBackends"]["pointer"] == "xtest", environment
+            assert environment["capabilities"]["pointerInput"] == {
+                "available": True,
+                "backend": "xtest",
+                "sharedSeat": True,
+                "nonInterfering": False,
+            }, environment
+            assert environment["capabilities"]["processLaunch"]["available"] is True
+            assert environment["capabilities"]["filesystem"]["available"] is False
+            blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
+            assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
+            assert "agent_cursor_unavailable" in blocker_ids, environment
+            assert environment["setupActions"], environment
 
             indicator_status = json.loads(text(client.tool("agent_cursor_status")))
             assert indicator_status["available"] is False, indicator_status

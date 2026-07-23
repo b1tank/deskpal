@@ -20,7 +20,7 @@
 
 /* ── Tool registry ────────────────────────────────────────────────────────── */
 
-#define MAX_TOOLS 32
+#define MAX_TOOLS 64
 static McpTool  g_tools[MAX_TOOLS];
 static int      g_tool_count = 0;
 static cJSON   *g_schemas[MAX_TOOLS]; /* owned schema objects */

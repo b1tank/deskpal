@@ -16,8 +16,9 @@ the user's visible desktop:
   caller ownership hooks, click-through behavior, and absence of input APIs.
 - `e2e_isolation.py`: parent/child routing, Xvfb lifecycle, cleanup, malformed
   session IDs, missing-window safety, OCR, screenshots, and binary replacement.
-- `e2e_computer_use.py`: deterministic Tk workflow for app identity, screenshot
-  scaling metadata, screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
+- `e2e_computer_use.py`: deterministic Tk workflow for app identity, environment
+  capability/blocker reporting, screenshot scaling metadata,
+  screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
   controller lock contention/release, and isolated-operation independence.
 - `e2e_accessibility.py`: optional AT-SPI tool schemas, unavailable capability,
   bounded semantic tree output, filtering/truncation, logical bounds, actions,
@@ -29,6 +30,9 @@ the user's visible desktop:
   coverage runs inside
   private Xvfb and D-Bus/AT-SPI sessions and does not change host accessibility
   settings.
+
+Environment-status coverage also verifies that isolated sessions report no
+shared host seat while visible sessions disclose compatibility risks.
 
 `e2e_isolation.py` also proves that direct `--xvfb-child`, ambient headless
 markers, fake inherited descriptors, and PATH-shadowed `xvfb-run` cannot forge

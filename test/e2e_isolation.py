@@ -203,9 +203,11 @@ def main():
             isolated_tool = tool_by_name(tools, "launch_isolated_app")
             desktop_tool = tool_by_name(tools, "launch_app")
             screenshot_tool = tool_by_name(tools, "screenshot")
+            environment_tool = tool_by_name(tools, "get_environment_status")
             assert "locally developed app" in isolated_tool["description"]
             assert "visible desktop" in desktop_tool["description"]
             assert "sessionId" in screenshot_tool["inputSchema"]["properties"]
+            assert "sessionId" in environment_tool["inputSchema"]["properties"]
 
             for malformed in (None, 42, {}, ""):
                 failed = client.tool("list_windows", {"sessionId": malformed})
@@ -300,6 +302,18 @@ def main():
             assert "No window found" in text(desktop_lookup), text(desktop_lookup)
 
             session_args = {"sessionId": session_id}
+            isolated_environment = json.loads(
+                text(client.tool("get_environment_status", session_args))
+            )
+            assert isolated_environment["scope"] == "isolated", isolated_environment
+            assert isolated_environment["sharedSeat"] is False, isolated_environment
+            assert isolated_environment["capabilities"]["pointerInput"]["nonInterfering"] is True
+            isolated_blockers = {
+                blocker["id"] for blocker in isolated_environment["blockers"]
+            }
+            assert "non_interfering_pixel_input_unavailable" not in isolated_blockers
+            assert "agent_cursor_unavailable" not in isolated_blockers
+
             isolated_lookup = client.tool(
                 "find_window", {"name": WINDOW_TITLE, **session_args}
             )

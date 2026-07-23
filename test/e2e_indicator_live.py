@@ -95,6 +95,14 @@ def run_suite():
     owner_remote = None
     forced_remote = None
     try:
+        environment = json.loads(text(owner.tool("get_environment_status")))
+        assert environment["scope"] == "visible-desktop", environment
+        assert environment["capabilities"]["agentCursor"]["available"] is True, environment
+        assert environment["capabilities"]["backgroundPixelInput"]["available"] is False, environment
+        blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
+        assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
+        assert "agent_cursor_unavailable" not in blocker_ids, environment
+
         status = json.loads(text(owner.tool("agent_cursor_status")))
         assert status["available"] is True, status
         assert len(status["monitors"]) == 1, status
