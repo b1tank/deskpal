@@ -1,6 +1,6 @@
 # Human-like computer-use experiments
 
-Date: 2026-07-19  
+Date: 2026-07-19
 Environment: Ubuntu 22.04, GNOME Shell 42.9, Wayland, 3840x2160 at 2x
 display scale
 
@@ -23,9 +23,11 @@ It does not replace screenshots or compositor integration:
   AT-SPI, so semantic bounds cannot be directly overlaid on physical desktop
   screenshots
 
-The target architecture should be hybrid: AT-SPI first, portal capture and
-input when approved, X11/Xwayland preserved, and OCR/pixels as a verified
-fallback.
+The target architecture should be hybrid: AT-SPI first, compositor capture and
+surface-targeted input through a trusted desktop broker, and OCR/pixels as a
+verified fallback. X11/Xwayland and portal RemoteDesktop input remain useful
+compatibility evidence, but their shared-seat behavior is not the product
+north star. See [plan.md](plan.md).
 
 ## Measured experiments
 
@@ -224,24 +226,25 @@ couples resolution, capture, focus, input, and OCR.
 Single screenshots can use the Screenshot portal earlier, but repeated action
 verification needs a retained ScreenCast stream.
 
-### Slice 5: Portal RemoteDesktop input (2-4 weeks after ScreenCast)
+### Slice 5: Desktop broker contract and GNOME proof (4-8 weeks)
 
-- approved session lifecycle and device negotiation
-- pointer, keyboard, scroll, and touch dispatch
-- stream-relative absolute coordinates
-- keycode/keysym mapping and modifier cleanup
-- visible abort, ownership, and session status
-- portal revocation and compositor restart handling
+- authenticated, capability-scoped broker protocol
+- stable surface identity shared by enumeration, capture, and actions
+- a background-window click with no human pointer, focus, or stacking change
+- pointer, keyboard, scroll, and drag delivery to an exact surface
+- visible abort, ownership, revocation, and compositor-restart handling
+- independent broker-side app/surface authorization
 
-Portal input should complement semantic actions, not replace them.
+The background-window click is the architectural gate. Portal RemoteDesktop
+may remain a shared-seat fallback, but it does not satisfy this slice.
 
-### Slice 6: GNOME/KDE window adapters (4-8 weeks per compositor family)
+### Slice 6: Production GNOME and additional desktop brokers
 
 Needed for capabilities portals and AT-SPI do not supply reliably:
 
 - complete top-level window enumeration and stable app identity
 - global placement and stacking
-- activation/minimize/maximize where AT-SPI fails
+- surface-targeted input where AT-SPI fails
 - compositor-specific dialogs and surfaces without accessibility
 
 This is the expensive part of "any app" support and cannot be solved by one
@@ -249,21 +252,23 @@ cross-desktop API today.
 
 ## Overall effort and limits
 
-For one experienced Linux desktop engineer, slices 1-5 (semantic control,
-verified actions, backend routing, ScreenCast, and RemoteDesktop) total
-approximately 10-18 engineer-weeks, including tests and hardening. A complete
-GNOME window-management adapter is another 4-8 weeks; adding KDE at comparable
-quality is another 4-8 weeks. Reaching "no barrier for any app" is not a finite
+The implemented semantic slices retain their measured estimates. The trusted
+broker is a larger desktop integration project whose schedule must be set only
+after the GNOME background-action proof establishes feasibility; a portal
+RemoteDesktop implementation is not counted as completion because it still
+uses the human's logical seat. Adding KDE at comparable quality is a separate
+desktop project. Reaching "no barrier for any app" is not a finite
 compatibility claim: inaccessible custom canvases, games, protected surfaces,
-remote desktops, and apps that disable accessibility will always require
-pixel/input fallback and explicit capability reporting.
+remote desktops, and apps that disable accessibility will always require a
+verified fallback and explicit capability reporting.
 
 A realistic goal is:
 
 - semantic, verified actions for accessible apps
-- approved portal capture/input for native Wayland
-- compositor adapters for window management
-- current X11/Xwayland support retained
+- approved portal/compositor capture for native Wayland
+- trusted compositor brokers for non-interfering surface-targeted input
+- current X11/Xwayland support retained only as a compatibility path while
+  broker coverage is built
 - OCR/pixels as a measured fallback
 - every mutation reports what backend acted and how success was verified
 

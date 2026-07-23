@@ -15,6 +15,9 @@ classifier.
 See [humanlike-computer-use-experiments.md](humanlike-computer-use-experiments.md)
 for measured AT-SPI, native-Wayland portal, semantic identity, focus-event,
 and verified-action prototypes with production effort estimates.
+The product north star and retirement policy live in [plan.md](plan.md). This
+document records current parity and validation evidence; where older
+compatibility mechanisms differ from that plan, `plan.md` is authoritative.
 
 ## Current parity
 
@@ -43,7 +46,9 @@ and verified-action prototypes with production effort estimates.
 
 ## Shipped architecture
 
-- **Desktop backend:** X11/Xwayland discovery and screenshots, uinput/XTest input.
+- **Compatibility desktop backend:** X11/Xwayland discovery and screenshots,
+  with shared-seat uinput/XTest input. This is shipped behavior, not the target
+  interaction architecture.
 - **Semantic backend:** optional AT-SPI inspection and verified actions for
   accessible controls. Locators are short-lived and re-resolved before every
   mutation; protected/ambiguous/incomplete targets fail closed.
@@ -60,88 +65,13 @@ and verified-action prototypes with production effort estimates.
   verifiers cannot satisfy false-state postconditions. Private children share
   the parent's validated inherited kernel lock rather than bypassing it.
 
-## North-star milestones
+## Direction
 
-### M1: Policy engine and app identity
-
-Build policy as a separate layer above display backends. It must make decisions
-on a stable app identity (backend, class/app-id, executable, PID, title), not on
-window title alone.
-
-Deliverables:
-
-- `policy.c` with `view`, `click`, and `full` tiers.
-- Config schema for denied apps and fixed tier overrides.
-- Tool-dispatch authorization before any screenshot/input/clipboard action.
-- Policy decisions returned as structured MCP errors.
-- Tests proving denied apps cannot be targeted indirectly by window ID.
-
-An MCP server cannot display Claude's native approval card by itself. A
-production per-app prompt needs either an MCP elicitation/client capability or
-a small trusted local approval UI. Until that exists, fail closed for rules
-that require approval rather than silently auto-approving.
-
-### M2: Operator control and lifecycle
-
-- Global Esc abort monitor that consumes the key and cancels the current
-  action without releasing the session lock.
-- Explicit `release_control`/status tools or MCP lifecycle integration.
-- Owner metadata robust enough to identify the competing host/session.
-- Optional notification while control is held.
-- Cancellation-aware OCR, waits, and long input sequences.
-
-### M3: Visible-session privacy
-
-- Snapshot stacking/minimized state.
-- Hide or minimize non-approved apps while controlling the desktop.
-- Restore state reliably on normal completion, abort, crash, and parent death.
-- Mask denied/sensitive windows in full-screen captures.
-- Exclude the controlling terminal/IDE from screenshots when requested.
-
-This requires a compositor/window-manager adapter. Do not implement it as
-best-effort `xdotool` calls without crash recovery and state restoration tests.
-
-### M4: Native Wayland backend
-
-Create a backend interface before adding compositor-specific code:
-
-- window enumeration and app identity
-- capture screen/window/region
-- focus/activate/resize where supported
-- pointer and keyboard injection
-- capability reporting
-
-Target order:
-
-1. X11 backend extracted from current code.
-2. `xdg-desktop-portal` ScreenCast/Screenshot capture and RemoteDesktop input.
-3. GNOME Shell integration for window enumeration/activation where portals do
-   not expose per-window control.
-4. KDE/KWin adapter.
-5. Capability-aware fallback with explicit unsupported errors.
-
-Portal sessions are asynchronous and permission-bearing, so they belong in a
-long-lived backend object rather than shell-command fallbacks.
-
-Current GNOME evidence: System Monitor's main window runs under Xwayland, but
-"Search for Open Files" is rendered as a native-Wayland dialog. X11 exposes
-only an unmapped compatibility window, so discovery, capture, OCR, and direct
-dialog input are reported as BLOCKED in `test/e2e_desktop.py` rather than
-misreported as product regressions.
-
-### M5: Safety-aware orchestration
-
-Some Claude behaviors are model/client responsibilities, not display-server
-features:
-
-- prefer MCP/Bash/browser tools before generic screen control
-- classify prompt injection in visual content
-- require confirmation for external side effects
-- warn when an approved app implies shell/filesystem/system-setting access
-
-Deskpal should expose enough structured identity and action metadata for a host
-to enforce these rules. It should not claim equivalent safety merely because
-it can move the pointer.
+The product roadmap is maintained in [plan.md](plan.md). In short: prefer
+verified semantic actions, then a trusted compositor broker that addresses an
+exact surface without changing the human pointer, focus, or stacking. Keep
+shared-seat X11, portal input, forced focus, and forced XWayland only as
+explicit compatibility fallbacks while those routes are replaced and retired.
 
 ## Test gates for every milestone
 
