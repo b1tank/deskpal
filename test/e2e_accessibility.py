@@ -139,6 +139,21 @@ def run_rich_suite(env):
             time.sleep(0.05)
         else:
             raise AssertionError("accessibility fixture window did not appear")
+        fixture_window_id = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--name", f"^{TITLE}$"],
+            env=env,
+            text=True,
+        ).splitlines()[0]
+        subprocess.run(
+            [
+                "xprop", "-root", "-f", "_NET_ACTIVE_WINDOW", "32x",
+                "-set", "_NET_ACTIVE_WINDOW", fixture_window_id,
+            ],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
         client = DeskpalClient(
             env, args=["--no-uinput", "--allow-exec"], name="e2e-accessibility-rich"
         )

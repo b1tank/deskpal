@@ -235,6 +235,7 @@ def run_suite():
             assert app_state["consistency"] == {
                 "identityStable": True,
                 "geometryStable": True,
+                "focusKnown": True,
                 "focusStable": True,
                 "transformSupported": True,
                 "stable": True,
@@ -249,6 +250,28 @@ def run_suite():
                 {"windowId": app_state["target"]["windowId"], "maxWidth": 360},
             )
             assert by_id["appState"]["target"]["windowId"] == app_state["target"]["windowId"]
+            subprocess.run(
+                ["xprop", "-root", "-remove", "_NET_ACTIVE_WINDOW"],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                check=True,
+            )
+            unknown_focus = client.tool(
+                "get_app_state", {"windowId": app_state["target"]["windowId"]}
+            )["appState"]
+            assert unknown_focus["focus"]["known"] is False, unknown_focus
+            assert unknown_focus["consistency"]["focusKnown"] is False, unknown_focus
+            assert unknown_focus["consistency"]["stable"] is False, unknown_focus
+            assert "captureId" not in unknown_focus, unknown_focus
+            subprocess.run(
+                [
+                    "xprop", "-root", "-f", "_NET_ACTIVE_WINDOW", "32x",
+                    "-set", "_NET_ACTIVE_WINDOW", app_state["target"]["windowId"],
+                ],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                check=True,
+            )
             client.tool(
                 "resize_window",
                 {"windowId": app_state["target"]["windowId"], "width": 700, "height": 500},

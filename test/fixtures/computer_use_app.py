@@ -37,6 +37,7 @@ def register_ewmh_client():
         return
     root_window = lib.XDefaultRootWindow(display)
     client_list = lib.XInternAtom(display, b"_NET_CLIENT_LIST", 0)
+    active_window = lib.XInternAtom(display, b"_NET_ACTIVE_WINDOW", 0)
     window_atom = lib.XInternAtom(display, b"WINDOW", 0)
     inner = ctypes.c_ulong(root.winfo_id())
     returned_root = ctypes.c_ulong()
@@ -50,6 +51,10 @@ def register_ewmh_client():
     client = ctypes.c_ulong(parent.value or inner.value)
     lib.XChangeProperty(
         display, root_window, client_list, window_atom, 32, 0,
+        ctypes.byref(client), 1,
+    )
+    lib.XChangeProperty(
+        display, root_window, active_window, window_atom, 32, 0,
         ctypes.byref(client), 1,
     )
     pid_atom = lib.XInternAtom(display, b"_NET_WM_PID", 0)

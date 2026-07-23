@@ -153,6 +153,7 @@ def run_suite():
         )
         app_state = app_state_result["appState"]
         assert app_state["target"]["processId"] == fixture.pid, app_state
+        assert app_state["focus"]["known"] is True, app_state
         assert app_state["consistency"]["stable"] is True, app_state
         image_x = app_state["image"]["imageWidth"] // 2
         image_y = app_state["image"]["imageHeight"] // 2

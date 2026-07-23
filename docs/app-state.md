@@ -53,8 +53,9 @@ revalidates it afterward.
 - If the window disappears, becomes non-viewable, changes PID/class, or the
   requested name becomes ambiguous, the call fails closed and issues no
   reusable capture ID.
-- If geometry or focus changes while identity remains valid, the image may be
-  returned for inspection, but `consistency.stable` is false,
+- If geometry or focus changes while identity remains valid, or focus cannot be
+  determined before and after capture, the image may be returned for inspection,
+  but `consistency.stable` is false,
   `retryRecommended` is true, and no reusable capture ID is issued.
 - Stable observations register the capture ID with target identity, geometry,
   source/image dimensions, and creation time.

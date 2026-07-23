@@ -436,7 +436,53 @@ unsigned long x11_get_active_window(void)
 {
 	Window wid = 0;
 	xdo_get_active_window(g_xdo, &wid);
-	return wid;
+	if (wid != 0) return wid;
+
+	Display *display = g_xdo->xdpy;
+	Window root = DefaultRootWindow(display);
+	Atom active_atom = XInternAtom(display, "_NET_ACTIVE_WINDOW", True);
+	if (active_atom != None) {
+		Atom actual_type = None;
+		int actual_format = 0;
+		unsigned long item_count = 0;
+		unsigned long bytes_after = 0;
+		unsigned char *value = NULL;
+		if (XGetWindowProperty(display, root, active_atom, 0, 1, False,
+		                       XA_WINDOW, &actual_type, &actual_format,
+		                       &item_count, &bytes_after, &value) == Success &&
+		    value && actual_type == XA_WINDOW && actual_format == 32 &&
+		    item_count == 1) {
+			wid = *(unsigned long *)value;
+			XFree(value);
+			if (wid != 0) return wid;
+		} else if (value) {
+			XFree(value);
+		}
+	}
+
+	/* Bare Xvfb sessions and some Xwayland focus paths do not publish
+	 * _NET_ACTIVE_WINDOW. Fall back to X input focus and normalize a focused
+	 * child widget to its top-level root child. None/PointerRoot remains
+	 * unknown rather than being reported as a stable window ID of zero. */
+	int revert_to = 0;
+	XGetInputFocus(display, &wid, &revert_to);
+	if (wid == None || wid == PointerRoot || wid == root) return 0;
+	for (int depth = 0; depth < 64; depth++) {
+		Window returned_root = None;
+		Window parent = None;
+		Window *children = NULL;
+		unsigned int child_count = 0;
+		if (!XQueryTree(g_xdo->xdpy, wid, &returned_root, &parent,
+		                &children, &child_count)) {
+			if (children) XFree(children);
+			return 0;
+		}
+		if (children) XFree(children);
+		if (parent == root) return wid;
+		if (parent == None || parent == wid) return 0;
+		wid = parent;
+	}
+	return 0;
 }
 
 /* ── Input ────────────────────────────────────────────────────────────────── */

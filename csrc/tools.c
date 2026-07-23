@@ -735,7 +735,8 @@ cJSON *tool_get_app_state(const cJSON *params)
 	}
 
 	int geometry_stable = same_window_geometry(&before, &after);
-	int focus_stable = focused_before == focused_after;
+	int focus_known = focused_before != 0 && focused_after != 0;
+	int focus_stable = focus_known && focused_before == focused_after;
 	int transform_supported = image.source_width == before.width &&
 	                          image.source_height == before.height;
 	int stable = geometry_stable && focus_stable && transform_supported;
@@ -769,10 +770,21 @@ cJSON *tool_get_app_state(const cJSON *params)
 	char after_focus_id[32];
 	snprintf(before_focus_id, sizeof(before_focus_id), "0x%lx", focused_before);
 	snprintf(after_focus_id, sizeof(after_focus_id), "0x%lx", focused_after);
-	cJSON_AddStringToObject(focus, "activeWindowIdBefore", before_focus_id);
-	cJSON_AddStringToObject(focus, "activeWindowIdAfter", after_focus_id);
-	cJSON_AddBoolToObject(focus, "targetFocusedBefore", focused_before == before.id);
-	cJSON_AddBoolToObject(focus, "targetFocusedAfter", focused_after == before.id);
+	cJSON_AddBoolToObject(focus, "known", focus_known);
+	if (focused_before) {
+		cJSON_AddStringToObject(focus, "activeWindowIdBefore", before_focus_id);
+		cJSON_AddBoolToObject(focus, "targetFocusedBefore", focused_before == before.id);
+	} else {
+		cJSON_AddNullToObject(focus, "activeWindowIdBefore");
+		cJSON_AddNullToObject(focus, "targetFocusedBefore");
+	}
+	if (focused_after) {
+		cJSON_AddStringToObject(focus, "activeWindowIdAfter", after_focus_id);
+		cJSON_AddBoolToObject(focus, "targetFocusedAfter", focused_after == before.id);
+	} else {
+		cJSON_AddNullToObject(focus, "activeWindowIdAfter");
+		cJSON_AddNullToObject(focus, "targetFocusedAfter");
+	}
 	cJSON_AddItemToObject(state, "focus", focus);
 
 	cJSON *image_meta = cJSON_CreateObject();
@@ -803,6 +815,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 	cJSON *consistency = cJSON_CreateObject();
 	cJSON_AddBoolToObject(consistency, "identityStable", 1);
 	cJSON_AddBoolToObject(consistency, "geometryStable", geometry_stable);
+	cJSON_AddBoolToObject(consistency, "focusKnown", focus_known);
 	cJSON_AddBoolToObject(consistency, "focusStable", focus_stable);
 	cJSON_AddBoolToObject(consistency, "transformSupported", transform_supported);
 	cJSON_AddBoolToObject(consistency, "stable", stable);
