@@ -2,8 +2,22 @@
   "name": "deskpal",
   "version": "0.2.0",
   "description": "Playwright for the desktop — a C-native MCP server giving AI agents eyes and hands for any Linux desktop app",
+  "keywords": [
+    "pi-package",
+    "computer-use",
+    "desktop-automation",
+    "mcp"
+  ],
   "bin": {
     "deskpal": "build/deskpal"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/deskpal.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
     "build": "meson setup build --reconfigure 2>/dev/null; ninja -C build",
