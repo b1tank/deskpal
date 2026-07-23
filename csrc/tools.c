@@ -1295,11 +1295,30 @@ static cJSON *semantic_mutation_error_result(const char *metadata_key,
 	return result;
 }
 
-static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
+typedef enum {
+	SEMANTIC_MUTATION_INVOKE = 0,
+	SEMANTIC_MUTATION_SET_TEXT = 1,
+	SEMANTIC_MUTATION_SET_VALUE = 2,
+} SemanticMutationKind;
+
+static cJSON *tool_agent_semantic_mutation(const cJSON *params,
+                                           SemanticMutationKind kind)
 {
 	const char *capture_id = json_str(params, "captureId", NULL);
 	const char *action = json_str(params, "action", NULL);
-	const char *value = json_str(params, "value", NULL);
+	const cJSON *value_item = cJSON_GetObjectItem(params, "value");
+	const char *text_value = cJSON_IsString(value_item)
+		? value_item->valuestring : NULL;
+	double numeric_value = cJSON_IsNumber(value_item)
+		? value_item->valuedouble : 0;
+	const char *operation = kind == SEMANTIC_MUTATION_SET_TEXT ? "setText" :
+		kind == SEMANTIC_MUTATION_SET_VALUE ? "setValue" : "invoke";
+	const char *result_key = kind == SEMANTIC_MUTATION_SET_TEXT
+		? "semanticSetText" : kind == SEMANTIC_MUTATION_SET_VALUE
+		? "semanticSetValue" : "semanticPress";
+	const char *error_key = kind == SEMANTIC_MUTATION_SET_TEXT
+		? "semanticSetTextError" : kind == SEMANTIC_MUTATION_SET_VALUE
+		? "semanticSetValueError" : "semanticPressError";
 	const char *cursor_id = json_str(params, "cursorId", "primary");
 	const char *color = json_str(params, "color", "#36C5F0");
 	const char *label = json_str(params, "label", cursor_id);
@@ -1307,11 +1326,13 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
 	const cJSON *verify = cJSON_GetObjectItem(params, "verify");
 	int timeout_ms = json_int(params, "timeoutMs", 3000);
 	if (!capture_id || !capture_id[0] || !cJSON_IsObject(target) ||
-	    (set_text && !value) ||
-	    (!set_text && (!action || !action[0] || !cJSON_IsObject(verify))))
-		return mcp_tool_error_result(set_text
-			? "captureId, value, and complete target locator are required"
-			: "captureId, action, complete target locator, and verify are required");
+	    (kind == SEMANTIC_MUTATION_SET_TEXT && !text_value) ||
+	    (kind == SEMANTIC_MUTATION_SET_VALUE && !cJSON_IsNumber(value_item)) ||
+	    (kind == SEMANTIC_MUTATION_INVOKE &&
+	     (!action || !action[0] || !cJSON_IsObject(verify))))
+		return mcp_tool_error_result(kind == SEMANTIC_MUTATION_INVOKE
+			? "captureId, action, complete target locator, and verify are required"
+			: "captureId, value, and complete target locator are required");
 
 	DeskpalCapture capture;
 	int lookup = captures_lookup(capture_id, &capture);
@@ -1340,7 +1361,7 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
 	if (!cJSON_IsTrue(supported)) {
 		cJSON_Delete(semantic);
 		cJSON *result = semantic_mutation_error_result(
-			set_text ? "semanticSetTextError" : "semanticPressError",
+			error_key,
 			"semantic_transform_unavailable",
 			"Fresh semantic bounds could not be verified against the captured window",
 			1);
@@ -1363,7 +1384,8 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
 			match_count == 0 ? "Semantic target locator is stale or unavailable" :
 			"Semantic target locator is ambiguous");
 	}
-	if (!set_text && !semantic_action_is_listed(match, action)) {
+	if (kind == SEMANTIC_MUTATION_INVOKE &&
+	    !semantic_action_is_listed(match, action)) {
 		cJSON_Delete(semantic);
 		cJSON_Delete(transform);
 		return mcp_tool_error_result(
@@ -1468,10 +1490,11 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
 	cJSON_AddStringToObject(action_params, "application", application_name);
 	cJSON_AddStringToObject(action_params, "window", window_name);
 	cJSON_AddItemToObject(action_params, "target", action_target);
-	cJSON_AddStringToObject(action_params, "operation",
-	                      set_text ? "setText" : "invoke");
-	if (set_text)
-		cJSON_AddStringToObject(action_params, "value", value);
+	cJSON_AddStringToObject(action_params, "operation", operation);
+	if (kind == SEMANTIC_MUTATION_SET_TEXT)
+		cJSON_AddStringToObject(action_params, "value", text_value);
+	else if (kind == SEMANTIC_MUTATION_SET_VALUE)
+		cJSON_AddNumberToObject(action_params, "value", numeric_value);
 	else {
 		cJSON_AddStringToObject(action_params, "action", action);
 		cJSON_AddItemToObject(action_params, "verify", cJSON_Duplicate(verify, 1));
@@ -1490,8 +1513,7 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
 
 	cJSON *payload = cJSON_CreateObject();
 	cJSON_AddStringToObject(payload, "route", "atspi");
-	cJSON_AddStringToObject(payload, "operation",
-	                      set_text ? "setText" : "invoke");
+	cJSON_AddStringToObject(payload, "operation", operation);
 	cJSON_AddStringToObject(payload, "captureId", capture_id);
 	cJSON_AddBoolToObject(payload, "indicatorMoved", 1);
 	cJSON_AddBoolToObject(payload, "sharedPointerMoved", 0);
@@ -1523,20 +1545,24 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
 	int verified = cJSON_IsTrue(cJSON_GetObjectItem(action_result, "verified"));
 	cJSON_AddBoolToObject(payload, "verified", verified);
 	cJSON_Delete(semantic);
-	cJSON *result = structured_text_result(payload,
-	                                     set_text ? "semanticSetText" : "semanticPress");
+	cJSON *result = structured_text_result(payload, result_key);
 	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
 
 cJSON *tool_agent_semantic_press(const cJSON *params)
 {
-	return tool_agent_semantic_mutation(params, 0);
+	return tool_agent_semantic_mutation(params, SEMANTIC_MUTATION_INVOKE);
 }
 
 cJSON *tool_agent_semantic_set_text(const cJSON *params)
 {
-	return tool_agent_semantic_mutation(params, 1);
+	return tool_agent_semantic_mutation(params, SEMANTIC_MUTATION_SET_TEXT);
+}
+
+cJSON *tool_agent_semantic_set_value(const cJSON *params)
+{
+	return tool_agent_semantic_mutation(params, SEMANTIC_MUTATION_SET_VALUE);
 }
 
 /* ── environment status ──────────────────────────────────────────────────── */
@@ -1603,6 +1629,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                      semantic_press_available ? "atspi-with-agent-cursor" : "unavailable");
 	cJSON_AddStringToObject(backends, "semanticSetText",
 	                      semantic_press_available ? "atspi-with-agent-cursor" : "unavailable");
+	cJSON_AddStringToObject(backends, "semanticSetValue",
+	                      semantic_press_available ? "atspi-with-agent-cursor" : "unavailable");
 	cJSON_AddItemToObject(payload, "selectedBackends", backends);
 
 	cJSON *capabilities = cJSON_CreateObject();
@@ -1631,6 +1659,10 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
 	                         0, 0));
 	cJSON_AddItemToObject(capabilities, "semanticSetText",
+	                     environment_capability(semantic_press_available,
+	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
+	                         0, 0));
+	cJSON_AddItemToObject(capabilities, "semanticSetValue",
 	                     environment_capability(semantic_press_available,
 	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
 	                         0, 0));
@@ -3740,6 +3772,29 @@ void tools_register_all(void)
 		"}",
 		tool_agent_semantic_set_text);
 
+	mcp_register_tool("agent_semantic_set_value",
+		"Move this process's logical cursor to a freshly re-resolved accessible value control from a stable get_app_state capture, set one finite in-range increment-aligned value through AT-SPI, and verify the exact numeric result. Never falls back to shared-pointer or keyboard input. Complete path locators require busName, objectPath, and processId.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"target\": {\"type\": \"object\", \"properties\": {"
+		"      \"role\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"      \"path\": {\"type\": \"array\", \"maxItems\": 32, \"items\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 4096}},"
+		"      \"busName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255},"
+		"      \"objectPath\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 1024},"
+		"      \"processId\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 2147483647}"
+		"    }, \"required\": [\"role\", \"path\", \"busName\", \"objectPath\", \"processId\"]},"
+		"    \"value\": {\"type\": \"number\"},"
+		"    \"cursorId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 40, \"default\": \"primary\"},"
+		"    \"color\": {\"type\": \"string\", \"pattern\": \"^#[0-9A-Fa-f]{6}$\", \"default\": \"#36C5F0\"},"
+		"    \"label\": {\"type\": \"string\", \"maxLength\": 48},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 3000}"
+		"  },"
+		"  \"required\": [\"captureId\", \"target\", \"value\"]"
+		"}",
+		tool_agent_semantic_set_value);
+
 	mcp_register_tool("list_windows",
 		"List top-level application windows on the user's desktop by default, or in an isolated verification session when sessionId is supplied. Set includeAll for recursive helper/dialog discovery.",
 		"{"
@@ -3804,8 +3859,8 @@ void tools_register_all(void)
 		"      ,\"objectPath\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 1024}"
 		"      ,\"processId\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 2147483647}"
 		"    }, \"required\": [\"role\"], \"anyOf\": [{\"required\": [\"name\"]}, {\"required\": [\"path\"]}], \"allOf\": [{\"if\": {\"required\": [\"path\"]}, \"then\": {\"required\": [\"busName\", \"objectPath\", \"processId\"]}}]},"
-		"    \"operation\": {\"type\": \"string\", \"enum\": [\"setText\", \"focus\", \"invoke\"]},"
-		"    \"value\": {\"type\": \"string\", \"maxLength\": 2048},"
+		"    \"operation\": {\"type\": \"string\", \"enum\": [\"setText\", \"setValue\", \"focus\", \"invoke\"]},"
+		"    \"value\": {\"oneOf\": [{\"type\": \"string\", \"maxLength\": 2048}, {\"type\": \"number\"}]},"
 		"    \"action\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
 		"    \"verify\": {\"type\": \"object\", \"properties\": {"
 		"      \"role\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
@@ -3822,7 +3877,7 @@ void tools_register_all(void)
 		"  },"
 		"  \"required\": [\"target\", \"operation\"],"
 		"  \"anyOf\": [{\"required\": [\"application\"]}, {\"required\": [\"window\"]}],"
-		"  \"allOf\": [{\"if\": {\"properties\": {\"operation\": {\"const\": \"setText\"}}}, \"then\": {\"required\": [\"value\"]}}, {\"if\": {\"properties\": {\"operation\": {\"const\": \"invoke\"}}}, \"then\": {\"required\": [\"action\", \"verify\"]}}]"
+		"  \"allOf\": [{\"if\": {\"properties\": {\"operation\": {\"const\": \"setText\"}}}, \"then\": {\"required\": [\"value\"]}}, {\"if\": {\"properties\": {\"operation\": {\"const\": \"setValue\"}}}, \"then\": {\"required\": [\"value\"]}}, {\"if\": {\"properties\": {\"operation\": {\"const\": \"invoke\"}}}, \"then\": {\"required\": [\"action\", \"verify\"]}}]"
 		"}",
 		tool_accessibility_action);
 

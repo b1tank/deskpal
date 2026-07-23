@@ -6,6 +6,7 @@
  */
 #include "accessibility.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,6 +119,8 @@ typedef struct {
 	int text_truncated;
 	int state_value;
 	int state_observed;
+	double value;
+	int value_observed;
 	int satisfied;
 } AccessibilityVerification;
 
@@ -409,6 +412,30 @@ static cJSON *serialize_bounds(AtspiAccessible *node)
 	return bounds;
 }
 
+static cJSON *serialize_value(AtspiAccessible *node)
+{
+	if (!prepare_atspi_call()) return NULL;
+	AtspiValue *value = atspi_accessible_get_value_iface(node);
+	if (!value) return NULL;
+	GError *error = NULL;
+	double current = atspi_value_get_current_value(value, &error);
+	double minimum = error ? 0 : atspi_value_get_minimum_value(value, &error);
+	double maximum = error ? 0 : atspi_value_get_maximum_value(value, &error);
+	double increment = error ? 0 : atspi_value_get_minimum_increment(value, &error);
+	g_object_unref(value);
+	if (error || !isfinite(current) || !isfinite(minimum) ||
+	    !isfinite(maximum) || !isfinite(increment)) {
+		clear_error(&error);
+		return NULL;
+	}
+	cJSON *result = cJSON_CreateObject();
+	cJSON_AddNumberToObject(result, "current", current);
+	cJSON_AddNumberToObject(result, "minimum", minimum);
+	cJSON_AddNumberToObject(result, "maximum", maximum);
+	cJSON_AddNumberToObject(result, "minimumIncrement", increment);
+	return result;
+}
+
 static cJSON *serialize_actions(AtspiAccessible *node, int *actionable,
 	                            int *truncated)
 {
@@ -522,6 +549,8 @@ static cJSON *serialize_node(AtspiAccessible *node,
 		: serialize_attributes(node, &attributes_truncated));
 	cJSON *bounds = serialize_bounds(node);
 	if (bounds) cJSON_AddItemToObject(result, "bounds", bounds);
+	cJSON *value = serialize_value(node);
+	if (value) cJSON_AddItemToObject(result, "value", value);
 	int actions_truncated = 0;
 	cJSON_AddItemToObject(result, "actions",
 		serialize_actions(node, actionable, &actions_truncated));
@@ -946,6 +975,59 @@ static AccessibilityMutation perform_set_text(AtspiAccessible *node,
 	return outcome;
 }
 
+static int node_value(AtspiAccessible *node, double *current,
+                      double *minimum, double *maximum, double *increment)
+{
+	if (!prepare_atspi_call()) return -1;
+	AtspiValue *value = atspi_accessible_get_value_iface(node);
+	if (!value) return -1;
+	GError *error = NULL;
+	*current = atspi_value_get_current_value(value, &error);
+	*minimum = error ? 0 : atspi_value_get_minimum_value(value, &error);
+	*maximum = error ? 0 : atspi_value_get_maximum_value(value, &error);
+	*increment = error ? 0 : atspi_value_get_minimum_increment(value, &error);
+	g_object_unref(value);
+	if (error || !isfinite(*current) || !isfinite(*minimum) ||
+	    !isfinite(*maximum) || !isfinite(*increment)) {
+		clear_error(&error);
+		return -1;
+	}
+	return 0;
+}
+
+static int node_accepts_value(AtspiAccessible *node, double expected,
+                              double *current, double *minimum,
+                              double *maximum, double *increment)
+{
+	if (node_value(node, current, minimum, maximum, increment) != 0 ||
+	    expected < *minimum || expected > *maximum)
+		return 0;
+	if (*increment > 0) {
+		double steps = (expected - *minimum) / *increment;
+		if (fabs(steps - round(steps)) > 1e-6) return 0;
+	}
+	return 1;
+}
+
+static AccessibilityMutation perform_set_value(AtspiAccessible *node,
+                                                double new_value)
+{
+	AccessibilityMutation outcome = {0};
+	if (!prepare_atspi_call()) return outcome;
+	AtspiValue *value = atspi_accessible_get_value_iface(node);
+	if (!value) return outcome;
+	GError *error = NULL;
+	if (prepare_atspi_call()) {
+		outcome.issued = 1;
+		outcome.reported_success = atspi_value_set_current_value(
+			value, new_value, &error);
+		outcome.outcome_unknown = error != NULL;
+	}
+	g_object_unref(value);
+	clear_error(&error);
+	return outcome;
+}
+
 static AccessibilityMutation perform_focus(AtspiAccessible *node)
 {
 	AccessibilityMutation outcome = {0};
@@ -1064,11 +1146,13 @@ static int evaluate_verification(AtspiAccessible *node,
 	                             int verify_text, const char *expected_text,
 	                             int verify_state, AtspiStateType expected_state,
 	                             int expected_state_value,
+	                             int verify_value, double expected_value,
 	                             AccessibilityVerification *verification)
 {
 	clear_verification(verification);
 	int text_satisfied = !verify_text;
 	int state_satisfied = !verify_state;
+	int value_satisfied = !verify_value;
 	if (verify_text) {
 		verification->text = action_text(node,
 			&verification->text_truncated);
@@ -1085,7 +1169,21 @@ static int evaluate_verification(AtspiAccessible *node,
 		state_satisfied =
 			verification->state_value == expected_state_value;
 	}
-	verification->satisfied = text_satisfied && state_satisfied;
+	if (verify_value) {
+		AtspiValue *value = prepare_atspi_call()
+			? atspi_accessible_get_value_iface(node) : NULL;
+		if (!value) return -1;
+		GError *error = NULL;
+		verification->value = atspi_value_get_current_value(value, &error);
+		g_object_unref(value);
+		if (error || !isfinite(verification->value)) {
+			clear_error(&error);
+			return -1;
+		}
+		verification->value_observed = 1;
+		value_satisfied = fabs(verification->value - expected_value) <= 1e-6;
+	}
+	verification->satisfied = text_satisfied && state_satisfied && value_satisfied;
 	return 0;
 }
 
@@ -1614,6 +1712,8 @@ cJSON *accessibility_action(const cJSON *params)
 	AtspiStateType expected_state = ATSPI_STATE_INVALID;
 	int verify_text = 0;
 	int verify_state = 0;
+	int verify_value = 0;
+	double expected_value = 0;
 	AccessibilityIdentity target_identity = {0};
 	AccessibilityIdentity verify_identity = {0};
 	AtspiAction *prepared_action = NULL;
@@ -1642,6 +1742,9 @@ cJSON *accessibility_action(const cJSON *params)
 		if (strcmp(operation, "setText") == 0) {
 			expected_text = cJSON_GetObjectItem(params, "value")->valuestring;
 			verify_text = 1;
+		} else if (strcmp(operation, "setValue") == 0) {
+			expected_value = cJSON_GetObjectItem(params, "value")->valuedouble;
+			verify_value = 1;
 		} else {
 			expected_state_name = "focused";
 			expected_state = ATSPI_STATE_FOCUSED;
@@ -1695,6 +1798,10 @@ cJSON *accessibility_action(const cJSON *params)
 	int showing = 0;
 	int focusable = 0;
 	int editable = 0;
+	double current_value = 0;
+	double minimum_value = 0;
+	double maximum_value = 0;
+	double value_increment = 0;
 	if (node_state(target_search.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
@@ -1709,10 +1816,30 @@ cJSON *accessibility_action(const cJSON *params)
 	cJSON_AddBoolToObject(precondition, "showing", showing);
 	cJSON_AddBoolToObject(precondition, "focusable", focusable);
 	cJSON_AddBoolToObject(precondition, "editable", editable);
+	if (strcmp(operation, "setValue") == 0) {
+		if (node_value(target_search.match, &current_value, &minimum_value,
+		               &maximum_value, &value_increment) != 0) {
+			cJSON_AddStringToObject(result, "errorCode", "value_interface_unavailable");
+			cJSON_AddStringToObject(result, "error",
+				"Target does not expose a readable AT-SPI value interface");
+			cJSON_Delete(precondition);
+			release_search(&target_search);
+			goto action_done;
+		}
+		cJSON_AddNumberToObject(precondition, "currentValue", current_value);
+		cJSON_AddNumberToObject(precondition, "minimumValue", minimum_value);
+		cJSON_AddNumberToObject(precondition, "maximumValue", maximum_value);
+		cJSON_AddNumberToObject(precondition, "minimumIncrement", value_increment);
+	}
 	cJSON_AddItemToObject(result, "precondition", precondition);
 	if (!enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
-	    (strcmp(operation, "setText") == 0 && !editable)) {
+	    (strcmp(operation, "setText") == 0 && !editable) ||
+	    (strcmp(operation, "setValue") == 0 &&
+	     (expected_value < minimum_value || expected_value > maximum_value ||
+	      (value_increment > 0 && fabs((expected_value - minimum_value) /
+	       value_increment - round((expected_value - minimum_value) /
+	       value_increment)) > 1e-6)))) {
 		cJSON_AddStringToObject(result, "errorCode", "precondition_failed");
 		cJSON_AddStringToObject(result, "error", "Target is not enabled/showing or lacks the required state");
 		release_search(&target_search);
@@ -1754,10 +1881,13 @@ cJSON *accessibility_action(const cJSON *params)
 		cJSON_AddStringToObject(verification, "expectedState", expected_state_name);
 		cJSON_AddBoolToObject(verification, "expectedStateValue", expected_state_value);
 	}
+	if (verify_value)
+		cJSON_AddNumberToObject(verification, "expectedValue", expected_value);
 	AccessibilityVerification before = {0};
 	if (evaluate_verification(verify_pre.match,
 	    verify_text, expected_text, verify_state, expected_state,
-	    expected_state_value, &before) != 0 || g_query_error_count > 0) {
+	    expected_state_value, verify_value, expected_value,
+	    &before) != 0 || g_query_error_count > 0) {
 		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
 		cJSON_AddStringToObject(result, "error",
 			"Verification postcondition could not be read exactly before mutation");
@@ -1771,6 +1901,8 @@ cJSON *accessibility_action(const cJSON *params)
 	if (before.state_observed)
 		cJSON_AddBoolToObject(verification, "beforeStateValue",
 			before.state_value);
+	if (before.value_observed)
+		cJSON_AddNumberToObject(verification, "beforeValue", before.value);
 	cJSON_AddBoolToObject(verification, "alreadySatisfied", before.satisfied);
 	cJSON_AddItemToObject(result, "verification", verification);
 	release_search(&verify_pre);
@@ -1805,6 +1937,8 @@ cJSON *accessibility_action(const cJSON *params)
 		if (before.state_observed)
 			cJSON_AddBoolToObject(verification, "actualStateValue",
 				before.state_value);
+		if (before.value_observed)
+			cJSON_AddNumberToObject(verification, "actualValue", before.value);
 		clear_verification(&before);
 		release_search(&target_search);
 		clear_identity(&target_identity);
@@ -1837,13 +1971,18 @@ cJSON *accessibility_action(const cJSON *params)
 	target_search = target_before_action;
 
 	enabled = showing = focusable = editable = 0;
+	int value_precondition_valid = strcmp(operation, "setValue") != 0 ||
+		node_accepts_value(target_search.match, expected_value,
+		                   &current_value, &minimum_value, &maximum_value,
+		                   &value_increment);
 	if (node_state(target_search.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_EDITABLE, &editable) != 0 ||
 	    !enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
-	    (strcmp(operation, "setText") == 0 && !editable)) {
+	    (strcmp(operation, "setText") == 0 && !editable) ||
+	    !value_precondition_valid) {
 		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
 		cJSON_AddStringToObject(result, "error",
 			"Target preconditions changed before mutation");
@@ -1874,7 +2013,8 @@ cJSON *accessibility_action(const cJSON *params)
 	AccessibilityVerification immediate = {0};
 	if (evaluate_verification(verify_before_action.match,
 	    verify_text, expected_text, verify_state, expected_state,
-	    expected_state_value, &immediate) != 0 || g_query_error_count > 0) {
+	    expected_state_value, verify_value, expected_value,
+	    &immediate) != 0 || g_query_error_count > 0) {
 		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
 		cJSON_AddStringToObject(result, "error",
 			"Verification postcondition could not be read immediately before mutation");
@@ -1896,6 +2036,8 @@ cJSON *accessibility_action(const cJSON *params)
 		if (immediate.state_observed)
 			cJSON_AddBoolToObject(verification, "actualStateValue",
 				immediate.state_value);
+		if (immediate.value_observed)
+			cJSON_AddNumberToObject(verification, "actualValue", immediate.value);
 		clear_verification(&immediate);
 		release_search(&target_search);
 		goto action_done;
@@ -1923,13 +2065,18 @@ cJSON *accessibility_action(const cJSON *params)
 		goto action_done;
 	}
 	enabled = showing = focusable = editable = 0;
+	value_precondition_valid = strcmp(operation, "setValue") != 0 ||
+		node_accepts_value(target_dispatch.match, expected_value,
+		                   &current_value, &minimum_value, &maximum_value,
+		                   &value_increment);
 	if (node_state(target_dispatch.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
 	    node_state(target_dispatch.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
 	    node_state(target_dispatch.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
 	    node_state(target_dispatch.match, ATSPI_STATE_EDITABLE, &editable) != 0 ||
 	    !enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
-	    (strcmp(operation, "setText") == 0 && !editable)) {
+	    (strcmp(operation, "setText") == 0 && !editable) ||
+	    !value_precondition_valid) {
 		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
 		cJSON_AddStringToObject(result, "error",
 			"Target preconditions changed immediately before mutation");
@@ -1981,7 +2128,8 @@ cJSON *accessibility_action(const cJSON *params)
 	AccessibilityVerification dispatch_verification = {0};
 	if (evaluate_verification(verify_dispatch.match,
 	    verify_text, expected_text, verify_state, expected_state,
-	    expected_state_value, &dispatch_verification) != 0 ||
+	    expected_state_value, verify_value, expected_value,
+	    &dispatch_verification) != 0 ||
 	    g_query_error_count > 0) {
 		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
 		cJSON_AddStringToObject(result, "error",
@@ -2004,6 +2152,9 @@ cJSON *accessibility_action(const cJSON *params)
 		if (dispatch_verification.state_observed)
 			cJSON_AddBoolToObject(verification, "actualStateValue",
 				dispatch_verification.state_value);
+		if (dispatch_verification.value_observed)
+			cJSON_AddNumberToObject(verification, "actualValue",
+			                        dispatch_verification.value);
 		clear_verification(&dispatch_verification);
 		release_search(&target_search);
 		goto action_done;
@@ -2013,6 +2164,8 @@ cJSON *accessibility_action(const cJSON *params)
 	AccessibilityMutation mutation = {0};
 	if (strcmp(operation, "setText") == 0) {
 		mutation = perform_set_text(target_search.match, expected_text);
+	} else if (strcmp(operation, "setValue") == 0) {
+		mutation = perform_set_value(target_search.match, expected_value);
 	} else if (strcmp(operation, "focus") == 0) {
 		mutation = perform_focus(target_search.match);
 	} else {
@@ -2088,7 +2241,8 @@ cJSON *accessibility_action(const cJSON *params)
 		if (post.match_count == 1 && post.match) {
 			if (evaluate_verification(post.match,
 			    verify_text, expected_text, verify_state, expected_state,
-			    expected_state_value, &observed) != 0) {
+			    expected_state_value, verify_value, expected_value,
+			    &observed) != 0) {
 				verification_incomplete = 1;
 				release_search(&post);
 				break;
@@ -2108,6 +2262,8 @@ cJSON *accessibility_action(const cJSON *params)
 	if (observed.state_observed)
 		cJSON_AddBoolToObject(verification, "actualStateValue",
 			observed.state_value);
+	if (observed.value_observed)
+		cJSON_AddNumberToObject(verification, "actualValue", observed.value);
 	if (!verified && g_query_timed_out &&
 	    verification_was_readable)
 		verification_incomplete = 0;

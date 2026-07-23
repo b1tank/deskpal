@@ -155,6 +155,7 @@ def run_suite():
         assert environment["capabilities"]["agentCursor"]["available"] is True, environment
         assert environment["capabilities"]["semanticPress"]["available"] is True, environment
         assert environment["capabilities"]["semanticSetText"]["available"] is True, environment
+        assert environment["capabilities"]["semanticSetValue"]["available"] is True, environment
         assert environment["capabilities"]["backgroundPixelInput"]["available"] is False, environment
         blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
         assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
@@ -223,6 +224,10 @@ def run_suite():
         semantic_checkbox = next(
             node for node in semantic_nodes
             if node.get("name") == "Approval checkbox"
+        )
+        semantic_volume = next(
+            node for node in semantic_nodes
+            if node.get("name") == "Volume value"
         )
         press_baseline = desktop_state()
         press_arguments = {
@@ -300,6 +305,38 @@ def run_suite():
         assert idempotent_text["actionApplied"] is False, idempotent_text
         assert idempotent_text["inputDelivered"] is False, idempotent_text
         owner.tool("agent_cursor_hide", {"cursorId": "semantic-text-live"})
+        set_value_arguments = {
+            "captureId": app_state["captureId"],
+            "target": semantic_volume["locator"],
+            "value": 60,
+            "cursorId": "semantic-value-live",
+            "color": "#EC4899",
+            "label": "semantic value",
+        }
+        set_value_result = json.loads(
+            text(owner.tool("agent_semantic_set_value", set_value_arguments))
+        )
+        assert set_value_result["route"] == "atspi", set_value_result
+        assert set_value_result["operation"] == "setValue", set_value_result
+        assert set_value_result["verified"] is True, set_value_result
+        assert set_value_result["actionApplied"] is True, set_value_result
+        assert set_value_result["inputDelivered"] is True, set_value_result
+        assert set_value_result["action"]["verification"]["actualValue"] == 60
+        idempotent_value = json.loads(
+            text(owner.tool("agent_semantic_set_value", set_value_arguments))
+        )
+        assert idempotent_value["verified"] is True, idempotent_value
+        assert idempotent_value["actionApplied"] is False, idempotent_value
+        assert idempotent_value["inputDelivered"] is False, idempotent_value
+        invalid_value = owner.tool(
+            "agent_semantic_set_value",
+            {**set_value_arguments, "value": 101},
+        )
+        assert invalid_value.get("isError") is True, invalid_value
+        invalid_value_payload = json.loads(text(invalid_value))
+        assert invalid_value_payload["mutationIssued"] is False
+        assert invalid_value_payload["inputDelivered"] is False
+        owner.tool("agent_cursor_hide", {"cursorId": "semantic-value-live"})
         toggle_arguments = {
             "captureId": app_state["captureId"],
             "target": semantic_checkbox["locator"],

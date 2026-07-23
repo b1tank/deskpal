@@ -227,6 +227,9 @@ def run_rich_suite(env):
             node for node in app_state_nodes
             if node["name"] == "Apply validation message"
         )
+        app_state_volume = next(
+            node for node in app_state_nodes if node["name"] == "Volume value"
+        )
         entry_bounds = app_state_entry["bounds"]
         entry_stage_x = (
             (entry_bounds["x"] + entry_bounds["width"] / 2)
@@ -309,6 +312,16 @@ def run_rich_suite(env):
         checkbox_node = next(
             node for node in nodes if node["name"] == "Approval checkbox"
         )
+        volume_node = next(
+            node for node in nodes if node["name"] == "Volume value"
+        )
+        assert volume_node["role"] == "slider", volume_node
+        assert volume_node["value"] == {
+            "current": 25,
+            "minimum": 0,
+            "maximum": 100,
+            "minimumIncrement": 1,
+        }, volume_node
 
         focused_result = client.tool(
             "get_focused_element",
@@ -414,6 +427,27 @@ def run_rich_suite(env):
         assert unavailable_indicator_text.get("isError") is True
         assert "indicator" in text(unavailable_indicator_text).lower()
         assert visible_text("Validation message") == ""
+        unavailable_indicator_value = client.tool(
+            "agent_semantic_set_value",
+            {
+                "captureId": app_state["captureId"],
+                "target": app_state_volume["locator"],
+                "value": 60,
+            },
+        )
+        assert unavailable_indicator_value.get("isError") is True
+        assert "indicator" in text(unavailable_indicator_value).lower()
+        unchanged_value_tree = accessibility_payload(
+            client.tool(
+                "get_accessibility_tree",
+                {"application": "accessibility_app.py", "window": TITLE},
+            )
+        )
+        unchanged_volume = next(
+            node for node in find_nodes(unchanged_value_tree)
+            if node["name"] == "Volume value"
+        )
+        assert unchanged_volume["value"]["current"] == 25, unchanged_volume
 
         set_text_result = client.tool(
             "accessibility_action",
@@ -472,6 +506,52 @@ def run_rich_suite(env):
             },
         )
         assert restore_text_result.get("isError") is not True, restore_text_result
+
+        set_value_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "slider", "name": "Volume value"},
+                "operation": "setValue",
+                "value": 42,
+            },
+        )
+        assert set_value_result.get("isError") is not True, set_value_result
+        set_value = accessibility_payload(set_value_result)
+        assert set_value["verified"] is True, set_value
+        assert set_value["actionApplied"] is True, set_value
+        assert set_value["verification"]["beforeValue"] == 25, set_value
+        assert set_value["verification"]["actualValue"] == 42, set_value
+        idempotent_value = accessibility_payload(
+            client.tool(
+                "accessibility_action",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "target": {"role": "slider", "name": "Volume value"},
+                    "operation": "setValue",
+                    "value": 42,
+                },
+            )
+        )
+        assert idempotent_value["verified"] is True, idempotent_value
+        assert idempotent_value["actionApplied"] is False, idempotent_value
+        out_of_range_value = accessibility_payload(
+            client.tool(
+                "accessibility_action",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "target": {"role": "slider", "name": "Volume value"},
+                    "operation": "setValue",
+                    "value": 101,
+                },
+            )
+        )
+        assert out_of_range_value["verified"] is False, out_of_range_value
+        assert out_of_range_value["mutationIssued"] is False, out_of_range_value
+        assert out_of_range_value["errorCode"] == "precondition_failed"
 
         focus_result = client.tool(
             "accessibility_action",
@@ -1265,6 +1345,23 @@ def run_rich_suite(env):
         )
         assert routed_set_text.get("isError") is True, routed_set_text
         assert "visible desktop only" in text(routed_set_text), routed_set_text
+        routed_set_value = client.tool(
+            "agent_semantic_set_value",
+            {
+                "sessionId": isolated_id,
+                "captureId": "capture-dummy",
+                "target": {
+                    "role": "slider",
+                    "path": [0],
+                    "busName": ":1.1",
+                    "objectPath": "/dummy",
+                    "processId": 1,
+                },
+                "value": 50,
+            },
+        )
+        assert routed_set_value.get("isError") is True, routed_set_value
+        assert "visible desktop only" in text(routed_set_value), routed_set_value
         client.tool("close_isolated_session", {"sessionId": isolated_id})
 
         direct_env = env.copy()
@@ -1437,6 +1534,7 @@ def main():
                     "accessibility_action",
                     "agent_semantic_press",
                     "agent_semantic_set_text",
+                    "agent_semantic_set_value",
                 ):
                     tool = tool_by_name(tools, name)
                     assert "sessionId" not in tool["inputSchema"]["properties"], tool
@@ -1490,14 +1588,23 @@ def main():
                     "role", "path", "busName", "objectPath", "processId"
                 }
                 assert set_text_schema["properties"]["timeoutMs"]["default"] == 3000
+                set_value_schema = tool_by_name(
+                    tools, "agent_semantic_set_value"
+                )["inputSchema"]
+                assert set_value_schema["required"] == [
+                    "captureId", "target", "value"
+                ]
+                assert set_value_schema["properties"]["value"]["type"] == "number"
+                assert set_value_schema["properties"]["timeoutMs"]["default"] == 3000
                 verify_conditions = action_schema["properties"]["verify"]["allOf"]
                 assert {
                     "busName", "objectPath", "processId"
                 }.issubset(verify_conditions[0]["then"]["required"])
                 operation_conditions = action_schema["allOf"]
                 assert "value" in operation_conditions[0]["then"]["required"]
+                assert "value" in operation_conditions[1]["then"]["required"]
                 assert {"action", "verify"}.issubset(
-                    operation_conditions[1]["then"]["required"]
+                    operation_conditions[2]["then"]["required"]
                 )
                 for nul_arguments in (
                     {

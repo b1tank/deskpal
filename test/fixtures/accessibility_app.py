@@ -153,6 +153,12 @@ checkbox = Gtk.CheckButton(label="Approved")
 checkbox.get_accessible().set_name("Approval checkbox")
 layout.pack_start(checkbox, False, False, 0)
 
+volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+volume.set_value(25)
+volume.set_digits(0)
+volume.get_accessible().set_name("Volume value")
+layout.pack_start(volume, False, False, 0)
+
 for label in ("Duplicate A", "Duplicate B"):
     duplicate = Gtk.Button(label=label)
     duplicate.get_accessible().set_name("Duplicate action")
