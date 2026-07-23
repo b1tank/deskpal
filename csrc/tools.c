@@ -677,6 +677,67 @@ static void filter_semantic_process(cJSON *semantic, long process_id)
 
 #define APP_STATE_METADATA_LIMIT (3 * 1024 * 1024)
 
+static cJSON *semantic_stage_transform(const cJSON *semantic,
+                                       const WindowInfo *target)
+{
+	cJSON *transform = cJSON_CreateObject();
+	cJSON_AddStringToObject(transform, "sourceSpace", "atspi-logical");
+	cJSON_AddStringToObject(transform, "targetSpace", "desktop-stage-pixels");
+	cJSON_AddBoolToObject(transform, "supported", 0);
+
+	const cJSON *target_window_matched = cJSON_GetObjectItem(
+		semantic, "targetWindowMatched");
+	const cJSON *applications = cJSON_GetObjectItem(semantic, "applications");
+	if (!cJSON_IsTrue(target_window_matched) ||
+	    !cJSON_IsArray(applications) || cJSON_GetArraySize(applications) != 1) {
+		cJSON_AddStringToObject(transform, "reason", "exact_semantic_window_unavailable");
+		return transform;
+	}
+	const cJSON *application = cJSON_GetArrayItem(applications, 0);
+	const cJSON *windows = cJSON_GetObjectItem(application, "windows");
+	const cJSON *window = cJSON_IsArray(windows) && cJSON_GetArraySize(windows) == 1
+		? cJSON_GetArrayItem(windows, 0) : NULL;
+	const cJSON *nodes = window ? cJSON_GetObjectItem(window, "nodes") : NULL;
+	const cJSON *root = cJSON_IsArray(nodes) && cJSON_GetArraySize(nodes) > 0
+		? cJSON_GetArrayItem(nodes, 0) : NULL;
+	const cJSON *bounds = root ? cJSON_GetObjectItem(root, "bounds") : NULL;
+	const cJSON *x = bounds ? cJSON_GetObjectItem(bounds, "x") : NULL;
+	const cJSON *y = bounds ? cJSON_GetObjectItem(bounds, "y") : NULL;
+	const cJSON *width = bounds ? cJSON_GetObjectItem(bounds, "width") : NULL;
+	const cJSON *height = bounds ? cJSON_GetObjectItem(bounds, "height") : NULL;
+	if (!cJSON_IsNumber(x) || !cJSON_IsNumber(y) ||
+	    !cJSON_IsNumber(width) || !cJSON_IsNumber(height) ||
+	    width->valuedouble <= 0 || height->valuedouble <= 0) {
+		cJSON_AddStringToObject(transform, "reason", "semantic_window_bounds_unavailable");
+		return transform;
+	}
+
+	double scale_x = (double)target->width / width->valuedouble;
+	double scale_y = (double)target->height / height->valuedouble;
+	double scale_max = fmax(scale_x, scale_y);
+	if (scale_x <= 0 || scale_y <= 0 ||
+	    fabs(scale_x - scale_y) > scale_max * 0.05) {
+		cJSON_AddStringToObject(transform, "reason", "semantic_window_scale_nonuniform");
+		cJSON_AddNumberToObject(transform, "candidateScaleX", scale_x);
+		cJSON_AddNumberToObject(transform, "candidateScaleY", scale_y);
+		return transform;
+	}
+
+	double offset_x = target->x - x->valuedouble * scale_x;
+	double offset_y = target->y - y->valuedouble * scale_y;
+	cJSON_ReplaceItemInObject(transform, "supported", cJSON_CreateBool(1));
+	cJSON_AddNumberToObject(transform, "scaleX", scale_x);
+	cJSON_AddNumberToObject(transform, "scaleY", scale_y);
+	cJSON_AddNumberToObject(transform, "offsetX", offset_x);
+	cJSON_AddNumberToObject(transform, "offsetY", offset_y);
+	cJSON_AddBoolToObject(transform, "verifiedAgainstWindowGeometry", 1);
+	cJSON_AddItemToObject(transform, "semanticWindowBounds",
+	                     cJSON_Duplicate(bounds, 1));
+	cJSON_AddItemToObject(transform, "stageWindowGeometry",
+	                     window_geometry_json(target));
+	return transform;
+}
+
 static cJSON *app_state_error_result(const char *code, const char *message,
                                      int retry_recommended)
 {
@@ -734,6 +795,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 			1);
 	}
 
+	cJSON *semantic_transform = semantic_stage_transform(semantic, &before);
 	int geometry_stable = same_window_geometry(&before, &after);
 	int focus_known = focused_before != 0 && focused_after != 0;
 	int focus_stable = focus_known && focused_before == focused_after;
@@ -751,6 +813,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 	                                   &capture) != 0) {
 		free(image.png);
 		cJSON_Delete(semantic);
+		cJSON_Delete(semantic_transform);
 		return mcp_tool_error_result("Could not register stable app-state capture");
 	}
 
@@ -758,6 +821,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 	free(image.png);
 	if (!base64) {
 		cJSON_Delete(semantic);
+		cJSON_Delete(semantic_transform);
 		return mcp_tool_error_result("App-state image base64 encoding failed");
 	}
 	cJSON *result = mcp_image_result(base64, "image/png");
@@ -811,6 +875,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 	cJSON_AddItemToObject(state, "transform", transform);
 	if (stable) cJSON_AddStringToObject(state, "captureId", capture.id);
 	cJSON_AddItemToObject(state, "semantic", semantic);
+	cJSON_AddItemToObject(state, "semanticTransform", semantic_transform);
 
 	cJSON *consistency = cJSON_CreateObject();
 	cJSON_AddBoolToObject(consistency, "identityStable", 1);

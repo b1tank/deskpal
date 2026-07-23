@@ -216,6 +216,31 @@ def run_rich_suite(env):
         assert semantic_state["nodeCount"] >= 5, semantic_state
         assert semantic_state["includeText"] is False, semantic_state
         assert semantic_state["includeAttributes"] is False, semantic_state
+        semantic_transform = app_state["semanticTransform"]
+        assert semantic_transform["supported"] is True, semantic_transform
+        assert semantic_transform["verifiedAgainstWindowGeometry"] is True
+        app_state_nodes = find_nodes(semantic_state)
+        app_state_entry = next(
+            node for node in app_state_nodes if node["name"] == "Validation message"
+        )
+        entry_bounds = app_state_entry["bounds"]
+        entry_stage_x = (
+            (entry_bounds["x"] + entry_bounds["width"] / 2)
+            * semantic_transform["scaleX"]
+            + semantic_transform["offsetX"]
+        )
+        entry_stage_y = (
+            (entry_bounds["y"] + entry_bounds["height"] / 2)
+            * semantic_transform["scaleY"]
+            + semantic_transform["offsetY"]
+        )
+        target_geometry = app_state["target"]["geometry"]
+        assert target_geometry["x"] <= entry_stage_x < (
+            target_geometry["x"] + target_geometry["width"]
+        ), (entry_stage_x, semantic_transform)
+        assert target_geometry["y"] <= entry_stage_y < (
+            target_geometry["y"] + target_geometry["height"]
+        ), (entry_stage_y, semantic_transform)
         private_state = client.tool(
             "get_app_state",
             {
