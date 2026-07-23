@@ -316,6 +316,83 @@ unsigned long x11_find_window(const char *name)
 	return find_best_match(results, count, name, 0);
 }
 
+static void count_exact_tree(Window root, const char *name, WindowInfo *first,
+                             int *match_count, int *complete, int depth)
+{
+	if (depth > 64) {
+		*complete = 0;
+		return;
+	}
+	Window returned_root = None;
+	Window parent = None;
+	Window *children = NULL;
+	unsigned int child_count = 0;
+	if (!XQueryTree(g_xdo->xdpy, root, &returned_root, &parent,
+	                &children, &child_count)) {
+		if (children) XFree(children);
+		*complete = 0;
+		return;
+	}
+	for (unsigned int i = 0; i < child_count; i++) {
+		WindowInfo info;
+		if (fill_window_info(children[i], &info) != 0) {
+			*complete = 0;
+		} else if (info.viewable && info.width >= 10 && info.height >= 10 &&
+		           strcmp(info.title, name) == 0) {
+			if (*match_count == 0) *first = info;
+			(*match_count)++;
+		}
+		count_exact_tree(children[i], name, first, match_count,
+		                 complete, depth + 1);
+	}
+	if (children) XFree(children);
+}
+
+int x11_find_window_exact(const char *name, WindowInfo *first,
+                          int *match_count, int *complete)
+{
+	if (!name || !name[0] || !first || !match_count || !complete) return -1;
+	memset(first, 0, sizeof(*first));
+	*match_count = 0;
+	*complete = 1;
+
+	Display *display = g_xdo->xdpy;
+	Window root = DefaultRootWindow(display);
+	Atom client_list = XInternAtom(display, "_NET_CLIENT_LIST", True);
+	if (client_list != None) {
+		Atom actual_type = None;
+		int actual_format = 0;
+		unsigned long item_count = 0;
+		unsigned long bytes_after = 0;
+		unsigned char *data = NULL;
+		int status = XGetWindowProperty(display, root, client_list, 0, ~0L,
+		                                False, XA_WINDOW, &actual_type,
+		                                &actual_format, &item_count,
+		                                &bytes_after, &data);
+		if (status == Success && actual_type == XA_WINDOW && actual_format == 32) {
+			Window *windows = (Window *)data;
+			for (unsigned long i = 0; i < item_count; i++) {
+				WindowInfo info;
+				if (fill_window_info(windows[i], &info) != 0) {
+					*complete = 0;
+					continue;
+				}
+				if (!info.viewable || info.width < 10 || info.height < 10 ||
+				    strcmp(info.title, name) != 0)
+					continue;
+				if (*match_count == 0) *first = info;
+				(*match_count)++;
+			}
+			XFree(data);
+			return 0;
+		}
+		if (data) XFree(data);
+	}
+
+	count_exact_tree(root, name, first, match_count, complete, 0);
+	return 0;
+}
+
 unsigned long x11_find_app(const char *name)
 {
 	WindowInfo results[256];

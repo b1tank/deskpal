@@ -25,7 +25,7 @@ GDBUS_STATUS = [
 
 
 def require_dependencies():
-    required = ("gdbus", "xclip", "xdotool", "xprop")
+    required = ("gdbus", "xclip", "xdotool", "xmessage", "xprop")
     missing = [command for command in required if not shutil.which(command)]
     if missing:
         raise SystemExit(f"FAIL: missing dependencies: {', '.join(missing)}")
@@ -58,10 +58,11 @@ def desktop_state():
 
 
 def move(client, capture, x, y, cursor_id, color, label):
+    metadata = capture.get("screenshot", capture.get("appState"))
     result = client.tool(
         "agent_cursor_move",
         {
-            "captureId": capture["screenshot"]["captureId"],
+            "captureId": metadata["captureId"],
             "x": x,
             "y": y,
             "cursorId": cursor_id,
@@ -87,7 +88,41 @@ def wait_until_removed(remote_id, timeout=2):
 
 def run_suite():
     require_dependencies()
-    baseline = desktop_state()
+    fixture_title = "Deskpal App State Live Fixture"
+    fixture = subprocess.Popen(
+        [
+            "xmessage", "-geometry", "420x220+200+180",
+            "-title", fixture_title, "app-state observation",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 3
+    fixture_window_id = None
+    while time.monotonic() < deadline:
+        found = subprocess.run(
+            ["xdotool", "search", "--onlyvisible", "--name", f"^{fixture_title}$"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if found.returncode == 0 and found.stdout.strip():
+            fixture_window_id = found.stdout.splitlines()[0]
+            break
+        time.sleep(0.05)
+    else:
+        fixture.terminate()
+        fixture.wait(timeout=3)
+        raise AssertionError("live app-state fixture did not appear")
+    subprocess.run(
+        [
+            "xprop", "-id", fixture_window_id, "-f", "_NET_WM_PID", "32c",
+            "-set", "_NET_WM_PID", str(fixture.pid),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    time.sleep(0.1)
     existing_ids = {cursor["cursorId"] for cursor in raw_status()["cursors"]}
     owner = DeskpalClient(name="indicator-live-owner")
     peer = None
@@ -110,6 +145,42 @@ def run_suite():
         assert (monitor["x"], monitor["y"]) == (0, 0), monitor
         assert monitor["width"] == status["stageWidth"], status
         assert monitor["height"] == status["stageHeight"], status
+
+        app_state_baseline = desktop_state()
+        app_state_result = owner.tool(
+            "get_app_state",
+            {"windowName": fixture_title, "maxWidth": 210, "maxHeight": 110},
+        )
+        app_state = app_state_result["appState"]
+        assert app_state["target"]["processId"] == fixture.pid, app_state
+        assert app_state["consistency"]["stable"] is True, app_state
+        image_x = app_state["image"]["imageWidth"] // 2
+        image_y = app_state["image"]["imageHeight"] // 2
+        app_move = move(
+            owner,
+            app_state_result,
+            image_x,
+            image_y,
+            "app-state-live",
+            "#22C55E",
+            "app-state-live",
+        )
+        expected_app_x = app_state["transform"]["offsetX"] + round(
+            image_x * app_state["transform"]["scaleX"]
+        )
+        expected_app_y = app_state["transform"]["offsetY"] + round(
+            image_y * app_state["transform"]["scaleY"]
+        )
+        assert app_move["stagePosition"] == {
+            "x": expected_app_x,
+            "y": expected_app_y,
+        }, app_move
+        app_hidden = json.loads(
+            text(owner.tool("agent_cursor_hide", {"cursorId": "app-state-live"}))
+        )
+        assert app_hidden["hidden"] is True, app_hidden
+        assert desktop_state() == app_state_baseline
+        baseline = desktop_state()
 
         full = owner.tool("screenshot", {"fullScreen": True})
         full_meta = full["screenshot"]
@@ -272,6 +343,13 @@ def run_suite():
                     wait_until_removed(remote_id)
                 except Exception:
                     pass
+        if fixture.poll() is None:
+            fixture.terminate()
+            try:
+                fixture.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                fixture.kill()
+                fixture.wait(timeout=3)
 
 
 def main():

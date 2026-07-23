@@ -512,6 +512,329 @@ static cJSON *structured_text_result(cJSON *payload, const char *metadata_key)
 	return result;
 }
 
+static int resolve_app_state_target(const cJSON *params, WindowInfo *target,
+                                    const char **error_code,
+                                    char *error, size_t error_len)
+{
+	*error_code = "invalid_target";
+	const cJSON *id = cJSON_GetObjectItem(params, "windowId");
+	const cJSON *name = cJSON_GetObjectItem(params, "windowName");
+	if ((id != NULL) == (name != NULL)) {
+		snprintf(error, error_len,
+		         "Specify exactly one of windowId or exact windowName");
+		return -1;
+	}
+	if (id) {
+		if (!cJSON_IsString(id) || !id->valuestring[0]) {
+			snprintf(error, error_len, "windowId must be a non-empty string");
+			return -1;
+		}
+		char *end = NULL;
+		errno = 0;
+		unsigned long wid = strtoul(id->valuestring, &end, 0);
+		if (errno || end == id->valuestring || *end || wid == 0 ||
+		    x11_get_window_info(wid, target) != 0 || !target->viewable) {
+			*error_code = "target_unavailable";
+			snprintf(error, error_len, "Exact windowId is unavailable or not viewable");
+			return -1;
+		}
+	} else {
+		if (!cJSON_IsString(name) || !name->valuestring[0]) {
+			snprintf(error, error_len, "windowName must be a non-empty exact title");
+			return -1;
+		}
+		int matches = 0;
+		int complete = 0;
+		if (x11_find_window_exact(name->valuestring, target,
+		                          &matches, &complete) != 0 || !complete) {
+			*error_code = "target_traversal_incomplete";
+			snprintf(error, error_len,
+			         "Exact window traversal was incomplete; retry the observation");
+			return -1;
+		}
+		if (matches == 0) {
+			*error_code = "target_not_found_or_unsupported_backend";
+			snprintf(error, error_len,
+			         "Exact windowName was not found; the target may be native Wayland");
+			return -1;
+		}
+		if (matches != 1) {
+			*error_code = "target_ambiguous";
+			snprintf(error, error_len,
+			         "Exact windowName is ambiguous (%d live matches)", matches);
+			return -1;
+		}
+	}
+	if (target->pid <= 0 || !target->title[0] || !target->app_class[0]) {
+		*error_code = "target_identity_incomplete";
+		snprintf(error, error_len,
+		         "Target lacks the PID, title, or class required for stable identity");
+		return -1;
+	}
+	return 0;
+}
+
+static int same_window_identity(const WindowInfo *left, const WindowInfo *right)
+{
+	return left->id == right->id && left->pid == right->pid &&
+	       strcmp(left->title, right->title) == 0 &&
+	       strcmp(left->app_class, right->app_class) == 0;
+}
+
+static int same_window_geometry(const WindowInfo *left, const WindowInfo *right)
+{
+	return left->x == right->x && left->y == right->y &&
+	       left->width == right->width && left->height == right->height;
+}
+
+static cJSON *window_geometry_json(const WindowInfo *window)
+{
+	cJSON *geometry = cJSON_CreateObject();
+	cJSON_AddNumberToObject(geometry, "x", window->x);
+	cJSON_AddNumberToObject(geometry, "y", window->y);
+	cJSON_AddNumberToObject(geometry, "width", window->width);
+	cJSON_AddNumberToObject(geometry, "height", window->height);
+	return geometry;
+}
+
+static cJSON *window_identity_json(const WindowInfo *window)
+{
+	cJSON *identity = cJSON_CreateObject();
+	char window_id[32];
+	snprintf(window_id, sizeof(window_id), "0x%lx", window->id);
+	cJSON_AddStringToObject(identity, "backend", "x11");
+	cJSON_AddStringToObject(identity, "windowId", window_id);
+	cJSON_AddStringToObject(identity, "title", window->title);
+	cJSON_AddStringToObject(identity, "class", window->app_class);
+	cJSON_AddNumberToObject(identity, "processId", (double)window->pid);
+	cJSON_AddItemToObject(identity, "geometry", window_geometry_json(window));
+	return identity;
+}
+
+static int count_semantic_nodes(const cJSON *nodes, int *actionable)
+{
+	if (!cJSON_IsArray(nodes)) return 0;
+	int count = 0;
+	const cJSON *node = NULL;
+	cJSON_ArrayForEach(node, nodes) {
+		count++;
+		const cJSON *actions = cJSON_GetObjectItem(node, "actions");
+		if (cJSON_IsArray(actions) && cJSON_GetArraySize(actions) > 0)
+			(*actionable)++;
+		count += count_semantic_nodes(cJSON_GetObjectItem(node, "children"),
+		                              actionable);
+	}
+	return count;
+}
+
+static void filter_semantic_process(cJSON *semantic, long process_id)
+{
+	cJSON *applications = cJSON_GetObjectItem(semantic, "applications");
+	int original_matches = cJSON_IsArray(applications)
+		? cJSON_GetArraySize(applications) : 0;
+	if (cJSON_IsArray(applications)) {
+		for (int i = cJSON_GetArraySize(applications) - 1; i >= 0; i--) {
+			cJSON *application = cJSON_GetArrayItem(applications, i);
+			const cJSON *pid = cJSON_GetObjectItem(application, "processId");
+			if (!cJSON_IsNumber(pid) || (long)pid->valuedouble != process_id)
+				cJSON_DeleteItemFromArray(applications, i);
+		}
+	}
+	int app_count = cJSON_IsArray(applications)
+		? cJSON_GetArraySize(applications) : 0;
+	int window_count = 0;
+	int node_count = 0;
+	int actionable_count = 0;
+	const cJSON *application = NULL;
+	cJSON_ArrayForEach(application, applications) {
+		const cJSON *windows = cJSON_GetObjectItem(application, "windows");
+		window_count += cJSON_IsArray(windows) ? cJSON_GetArraySize(windows) : 0;
+		const cJSON *window = NULL;
+		cJSON_ArrayForEach(window, windows)
+			node_count += count_semantic_nodes(
+				cJSON_GetObjectItem(window, "nodes"), &actionable_count);
+	}
+	cJSON_ReplaceItemInObject(semantic, "matchedApplicationCount",
+	                         cJSON_CreateNumber(app_count));
+	cJSON_ReplaceItemInObject(semantic, "matchedWindowCount",
+	                         cJSON_CreateNumber(window_count));
+	cJSON_ReplaceItemInObject(semantic, "nodeCount",
+	                         cJSON_CreateNumber(node_count));
+	cJSON_ReplaceItemInObject(semantic, "actionableNodeCount",
+	                         cJSON_CreateNumber(actionable_count));
+	cJSON_AddNumberToObject(semantic, "targetProcessId", (double)process_id);
+	cJSON_AddNumberToObject(semantic, "exactTitleApplicationMatchesBeforeFilter",
+	                       original_matches);
+	cJSON_AddBoolToObject(semantic, "targetProcessMatched", app_count == 1);
+	cJSON_AddBoolToObject(semantic, "targetWindowMatched",
+	                     app_count == 1 && window_count == 1);
+	const cJSON *available = cJSON_GetObjectItem(semantic, "available");
+	if (cJSON_IsTrue(available) && node_count == 0)
+		cJSON_ReplaceItemInObject(semantic, "capability",
+		                         cJSON_CreateString("empty"));
+	cJSON_AddStringToObject(semantic, "coordinateSpace", "atspi-logical");
+}
+
+#define APP_STATE_METADATA_LIMIT (3 * 1024 * 1024)
+
+static cJSON *app_state_error_result(const char *code, const char *message,
+                                     int retry_recommended)
+{
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "code", code);
+	cJSON_AddStringToObject(payload, "message", message);
+	cJSON_AddBoolToObject(payload, "retryRecommended", retry_recommended);
+	cJSON *result = structured_text_result(payload, "appStateError");
+	cJSON_AddBoolToObject(result, "isError", 1);
+	return result;
+}
+
+cJSON *tool_get_app_state(const cJSON *params)
+{
+	int max_width = json_int(params, "maxWidth", 1920);
+	int max_height = json_int(params, "maxHeight", 1080);
+	int max_depth = json_int(params, "semanticMaxDepth", 4);
+	int max_nodes = json_int(params, "semanticMaxNodes", 120);
+	int include_text = json_bool(params, "includeText", 0);
+	int include_attributes = json_bool(params, "includeAttributes", 0);
+	if (max_width < 0 || max_width > 8192 || max_height < 0 || max_height > 8192)
+		return mcp_tool_error_result("maxWidth/maxHeight must be between 0 and 8192");
+	if (max_depth < 1 || max_depth > 8 || max_nodes < 1 || max_nodes > 300)
+		return mcp_tool_error_result("semanticMaxDepth/maxNodes exceed app-state bounds");
+
+	char error[256] = {0};
+	const char *target_error_code = "invalid_target";
+	WindowInfo before;
+	if (resolve_app_state_target(params, &before, &target_error_code,
+	                             error, sizeof(error)) != 0)
+		return app_state_error_result(target_error_code, error,
+			strcmp(target_error_code, "target_traversal_incomplete") == 0 ||
+			strcmp(target_error_code, "target_unavailable") == 0);
+	unsigned long focused_before = x11_get_active_window();
+
+	CapturedImage image;
+	if (capture_target_image(before.id, 0, max_width, max_height,
+	                         &image, error, sizeof(error)) != 0)
+		return mcp_tool_error_result(error);
+
+	cJSON *semantic = accessibility_tree_exact(NULL, before.title,
+		max_depth, max_nodes, 0, include_text, include_attributes);
+	if (!semantic) semantic = cJSON_CreateObject();
+	filter_semantic_process(semantic, before.pid);
+
+	WindowInfo after;
+	int resolved_after = resolve_app_state_target(
+		params, &after, &target_error_code, error, sizeof(error)) == 0;
+	unsigned long focused_after = x11_get_active_window();
+	if (!resolved_after || !same_window_identity(&before, &after)) {
+		free(image.png);
+		cJSON_Delete(semantic);
+		return app_state_error_result("target_replaced_during_observation",
+			"Target disappeared, was replaced, or became ambiguous during observation",
+			1);
+	}
+
+	int geometry_stable = same_window_geometry(&before, &after);
+	int focus_stable = focused_before == focused_after;
+	int transform_supported = image.source_width == before.width &&
+	                          image.source_height == before.height;
+	int stable = geometry_stable && focus_stable && transform_supported;
+
+	DeskpalCapture capture = {0};
+	if (stable && captures_store_window(before.id, before.pid,
+	                                   before.title, before.app_class,
+	                                   before.x, before.y,
+	                                   before.width, before.height,
+	                                   image.source_width, image.source_height,
+	                                   image.image_width, image.image_height,
+	                                   &capture) != 0) {
+		free(image.png);
+		cJSON_Delete(semantic);
+		return mcp_tool_error_result("Could not register stable app-state capture");
+	}
+
+	char *base64 = screenshot_base64_encode(image.png, image.png_len);
+	free(image.png);
+	if (!base64) {
+		cJSON_Delete(semantic);
+		return mcp_tool_error_result("App-state image base64 encoding failed");
+	}
+	cJSON *result = mcp_image_result(base64, "image/png");
+	free(base64);
+
+	cJSON *state = cJSON_CreateObject();
+	cJSON_AddItemToObject(state, "target", window_identity_json(&before));
+	cJSON *focus = cJSON_CreateObject();
+	char before_focus_id[32];
+	char after_focus_id[32];
+	snprintf(before_focus_id, sizeof(before_focus_id), "0x%lx", focused_before);
+	snprintf(after_focus_id, sizeof(after_focus_id), "0x%lx", focused_after);
+	cJSON_AddStringToObject(focus, "activeWindowIdBefore", before_focus_id);
+	cJSON_AddStringToObject(focus, "activeWindowIdAfter", after_focus_id);
+	cJSON_AddBoolToObject(focus, "targetFocusedBefore", focused_before == before.id);
+	cJSON_AddBoolToObject(focus, "targetFocusedAfter", focused_after == before.id);
+	cJSON_AddItemToObject(state, "focus", focus);
+
+	cJSON *image_meta = cJSON_CreateObject();
+	cJSON_AddNumberToObject(image_meta, "sourceWidth", image.source_width);
+	cJSON_AddNumberToObject(image_meta, "sourceHeight", image.source_height);
+	cJSON_AddNumberToObject(image_meta, "imageWidth", image.image_width);
+	cJSON_AddNumberToObject(image_meta, "imageHeight", image.image_height);
+	cJSON_AddNumberToObject(image_meta, "coordinateScaleX",
+	                       (double)image.source_width / image.image_width);
+	cJSON_AddNumberToObject(image_meta, "coordinateScaleY",
+	                       (double)image.source_height / image.image_height);
+	cJSON_AddItemToObject(state, "image", image_meta);
+
+	cJSON *transform = cJSON_CreateObject();
+	cJSON_AddStringToObject(transform, "imageSpace", "window-image-pixels");
+	cJSON_AddStringToObject(transform, "targetSpace", "desktop-stage-pixels");
+	cJSON_AddNumberToObject(transform, "offsetX", before.x);
+	cJSON_AddNumberToObject(transform, "offsetY", before.y);
+	cJSON_AddNumberToObject(transform, "scaleX",
+	                       (double)image.source_width / image.image_width);
+	cJSON_AddNumberToObject(transform, "scaleY",
+	                       (double)image.source_height / image.image_height);
+	cJSON_AddBoolToObject(transform, "supported", transform_supported);
+	cJSON_AddItemToObject(state, "transform", transform);
+	if (stable) cJSON_AddStringToObject(state, "captureId", capture.id);
+	cJSON_AddItemToObject(state, "semantic", semantic);
+
+	cJSON *consistency = cJSON_CreateObject();
+	cJSON_AddBoolToObject(consistency, "identityStable", 1);
+	cJSON_AddBoolToObject(consistency, "geometryStable", geometry_stable);
+	cJSON_AddBoolToObject(consistency, "focusStable", focus_stable);
+	cJSON_AddBoolToObject(consistency, "transformSupported", transform_supported);
+	cJSON_AddBoolToObject(consistency, "stable", stable);
+	cJSON_AddBoolToObject(consistency, "retryRecommended", !stable);
+	if (!geometry_stable)
+		cJSON_AddItemToObject(consistency, "geometryAfter",
+		                     window_geometry_json(&after));
+	cJSON_AddItemToObject(state, "consistency", consistency);
+	cJSON_AddBoolToObject(state, "sharedPointerMoved", 0);
+	cJSON_AddBoolToObject(state, "inputDelivered", 0);
+	cJSON_AddBoolToObject(state, "focusChanged", 0);
+	cJSON_AddBoolToObject(state, "stackingChanged", 0);
+	cJSON_AddBoolToObject(state, "clipboardChanged", 0);
+
+	char *state_text = cJSON_PrintUnformatted(state);
+	if (!state_text || strlen(state_text) > APP_STATE_METADATA_LIMIT) {
+		free(state_text);
+		cJSON_Delete(state);
+		cJSON_Delete(result);
+		return mcp_tool_error_result(
+			"App-state metadata exceeded the 3 MiB safety limit; reduce semanticMaxNodes or disable text/attributes");
+	}
+	cJSON *content = cJSON_GetObjectItem(result, "content");
+	cJSON *text_item = cJSON_CreateObject();
+	cJSON_AddStringToObject(text_item, "type", "text");
+	cJSON_AddStringToObject(text_item, "text", state_text);
+	cJSON_AddItemToArray(content, text_item);
+	free(state_text);
+	cJSON_AddItemToObject(result, "appState", state);
+	return result;
+}
+
 static cJSON *owned_indicator_status(char *error, size_t error_len)
 {
 	char *raw = NULL;
@@ -631,6 +954,18 @@ cJSON *tool_agent_cursor_status(const cJSON *params)
 	return structured_text_result(unavailable, "indicator");
 }
 
+static int window_capture_still_valid(const DeskpalCapture *capture)
+{
+	WindowInfo current;
+	return x11_get_window_info(capture->window_id, &current) == 0 &&
+	       current.viewable && current.pid == capture->process_id &&
+	       strcmp(current.title, capture->title) == 0 &&
+	       strcmp(current.app_class, capture->app_class) == 0 &&
+	       current.x == capture->window_x && current.y == capture->window_y &&
+	       current.width == capture->window_width &&
+	       current.height == capture->window_height;
+}
+
 cJSON *tool_agent_cursor_move(const cJSON *params)
 {
 	const char *capture_id = json_str(params, "captureId", NULL);
@@ -640,7 +975,7 @@ cJSON *tool_agent_cursor_move(const cJSON *params)
 	const cJSON *x_item = cJSON_GetObjectItem(params, "x");
 	const cJSON *y_item = cJSON_GetObjectItem(params, "y");
 	if (!capture_id || !capture_id[0] || strlen(capture_id) >= DESKPAL_CAPTURE_ID_LEN)
-		return mcp_tool_error_result("captureId must identify a recent full-screen capture");
+		return mcp_tool_error_result("captureId must identify a recent stable capture");
 	if (!cJSON_IsNumber(x_item) || !cJSON_IsNumber(y_item) ||
 	    x_item->valuedouble != x_item->valueint ||
 	    y_item->valuedouble != y_item->valueint)
@@ -649,7 +984,7 @@ cJSON *tool_agent_cursor_move(const cJSON *params)
 	DeskpalCapture capture;
 	int lookup = captures_lookup(capture_id, &capture);
 	if (lookup == -2)
-		return mcp_tool_error_result("captureId is stale; take a fresh full-screen screenshot");
+		return mcp_tool_error_result("captureId is stale; take a fresh observation");
 	if (lookup != 0)
 		return mcp_tool_error_result("captureId is unknown or no longer retained");
 	int image_x = x_item->valueint;
@@ -657,6 +992,10 @@ cJSON *tool_agent_cursor_move(const cJSON *params)
 	if (image_x < 0 || image_x >= capture.image_width ||
 	    image_y < 0 || image_y >= capture.image_height)
 		return mcp_tool_error_result("x/y fall outside the capture image bounds");
+	if (capture.target == DESKPAL_CAPTURE_WINDOW &&
+	    !window_capture_still_valid(&capture))
+		return mcp_tool_error_result(
+			"Window capture target was replaced or its geometry changed; observe again");
 
 	char error[256] = {0};
 	cJSON *before = owned_indicator_status(error, sizeof(error));
@@ -668,20 +1007,34 @@ cJSON *tool_agent_cursor_move(const cJSON *params)
 	}
 	int stage_width = cJSON_GetObjectItem(before, "stageWidth")->valueint;
 	int stage_height = cJSON_GetObjectItem(before, "stageHeight")->valueint;
-	double source_scale_x = (double)stage_width / capture.source_width;
-	double source_scale_y = (double)stage_height / capture.source_height;
-	double scale_max = fmax(source_scale_x, source_scale_y);
-	if (scale_max <= 0 || fabs(source_scale_x - source_scale_y) > scale_max * 0.01) {
+	int stage_x = 0;
+	int stage_y = 0;
+	if (capture.target == DESKPAL_CAPTURE_DESKTOP) {
+		double source_scale_x = (double)stage_width / capture.source_width;
+		double source_scale_y = (double)stage_height / capture.source_height;
+		double scale_max = fmax(source_scale_x, source_scale_y);
+		if (scale_max <= 0 ||
+		    fabs(source_scale_x - source_scale_y) > scale_max * 0.01) {
+			cJSON_Delete(before);
+			return mcp_tool_error_result(
+				"Capture and GNOME stage geometry no longer share one coordinate transform");
+		}
+		stage_x = (int)lround((double)image_x * stage_width / capture.image_width);
+		stage_y = (int)lround((double)image_y * stage_height / capture.image_height);
+	} else if (capture.target == DESKPAL_CAPTURE_WINDOW) {
+		stage_x = capture.window_x + (int)lround(
+			(double)image_x * capture.source_width / capture.image_width);
+		stage_y = capture.window_y + (int)lround(
+			(double)image_y * capture.source_height / capture.image_height);
+	} else {
 		cJSON_Delete(before);
-		return mcp_tool_error_result(
-			"Capture and GNOME stage geometry no longer share one coordinate transform");
+		return mcp_tool_error_result("captureId has an unsupported target type");
 	}
 	cJSON_Delete(before);
-
-	int stage_x = (int)lround((double)image_x * stage_width / capture.image_width);
-	int stage_y = (int)lround((double)image_y * stage_height / capture.image_height);
-	if (stage_x >= stage_width) stage_x = stage_width - 1;
-	if (stage_y >= stage_height) stage_y = stage_height - 1;
+	if (stage_x < 0 || stage_y < 0 ||
+	    stage_x >= stage_width || stage_y >= stage_height)
+		return mcp_tool_error_result(
+			"Resolved cursor point falls outside the current GNOME stage");
 
 	int created = 0;
 	int mutation_issued = 0;
@@ -2850,6 +3203,24 @@ void tools_register_all(void)
 		"}",
 		tool_get_environment_status);
 
+	mcp_register_tool("get_app_state",
+		"Observe one exact X11/Xwayland app window without activating it. Returns an image, backend-scoped identity, focus and geometry consistency, image-to-stage transform, short-lived capture ID when stable, and bounded untrusted AT-SPI state. Native Wayland targets and ambiguous names fail closed.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"windowId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 64},"
+		"    \"windowName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255, \"description\": \"Exact case-sensitive title\"},"
+		"    \"maxWidth\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 8192, \"default\": 1920},"
+		"    \"maxHeight\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 8192, \"default\": 1080},"
+		"    \"semanticMaxDepth\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 8, \"default\": 4},"
+		"    \"semanticMaxNodes\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 300, \"default\": 120},"
+		"    \"includeText\": {\"type\": \"boolean\", \"default\": false},"
+		"    \"includeAttributes\": {\"type\": \"boolean\", \"default\": false}"
+		"  },"
+		"  \"oneOf\": [{\"required\": [\"windowId\"]}, {\"required\": [\"windowName\"]}]"
+		"}",
+		tool_get_app_state);
+
 	mcp_register_tool("agent_cursor_status",
 		"Report GNOME logical-cursor availability, stage and monitor geometry, and only the cursors owned by this Deskpal process. Indicator state is visual metadata, not proof of delivered input.",
 		"{"
@@ -2859,7 +3230,7 @@ void tools_register_all(void)
 		tool_agent_cursor_status);
 
 	mcp_register_tool("agent_cursor_move",
-		"Create or move this Deskpal process's logical agent cursor to a point in a recent full-screen capture. Coordinates are pixels in the returned image, not source pixels. This moves only the visual indicator and never delivers application input.",
+		"Create or move this Deskpal process's logical agent cursor to a point in a recent full-screen screenshot or stable get_app_state capture. Coordinates are pixels in the returned image, not source pixels. This moves only the visual indicator and never delivers application input.",
 		"{"
 		"  \"type\": \"object\","
 		"  \"properties\": {"

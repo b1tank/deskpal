@@ -318,6 +318,14 @@ def main():
                 "find_window", {"name": WINDOW_TITLE, **session_args}
             )
             assert WINDOW_TITLE in text(isolated_lookup), text(isolated_lookup)
+            isolated_state_result = client.tool(
+                "get_app_state",
+                {"windowName": WINDOW_TITLE, "maxWidth": 512, **session_args},
+            )
+            assert isolated_state_result.get("isError") is True, isolated_state_result
+            assert isolated_state_result["appStateError"]["code"] == (
+                "target_identity_incomplete"
+            ), isolated_state_result
 
             for tool_name, arguments in (
                 ("screenshot", {}),

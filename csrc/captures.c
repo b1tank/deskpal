@@ -38,30 +38,67 @@ static void ensure_nonce(void)
 	}
 }
 
+static int store_capture(DeskpalCapture *next, DeskpalCapture *capture)
+{
+	if (!next || !capture || next->source_width <= 0 || next->source_height <= 0 ||
+	    next->image_width <= 0 || next->image_height <= 0)
+		return -1;
+	ensure_nonce();
+	int written = snprintf(next->id, sizeof(next->id), "capture-%016llx-%llu",
+	                       (unsigned long long)session_nonce,
+	                       (unsigned long long)++sequence);
+	if (written < 0 || (size_t)written >= sizeof(next->id)) return -1;
+	next->created_monotonic_ms = monotonic_ms();
+	history[history_next] = *next;
+	history_next = (history_next + 1) % CAPTURE_HISTORY_SIZE;
+	*capture = *next;
+	return 0;
+}
+
 int captures_store_desktop(int source_width, int source_height,
                            int image_width, int image_height,
                            DeskpalCapture *capture)
 {
-	if (!capture || source_width <= 0 || source_height <= 0 ||
-	    image_width <= 0 || image_height <= 0)
+	DeskpalCapture next = {
+		.target = DESKPAL_CAPTURE_DESKTOP,
+		.source_width = source_width,
+		.source_height = source_height,
+		.image_width = image_width,
+		.image_height = image_height,
+	};
+	return store_capture(&next, capture);
+}
+
+int captures_store_window(unsigned long window_id, long process_id,
+                          const char *title, const char *app_class,
+                          int window_x, int window_y,
+                          int window_width, int window_height,
+                          int source_width, int source_height,
+                          int image_width, int image_height,
+                          DeskpalCapture *capture)
+{
+	if (window_id == 0 || process_id <= 0 || !title || !title[0] ||
+	    !app_class || !app_class[0] || window_width <= 0 || window_height <= 0)
 		return -1;
-
-	ensure_nonce();
-	DeskpalCapture next = {0};
-	int written = snprintf(next.id, sizeof(next.id), "capture-%016llx-%llu",
-	                       (unsigned long long)session_nonce,
-	                       (unsigned long long)++sequence);
-	if (written < 0 || (size_t)written >= sizeof(next.id)) return -1;
-	next.source_width = source_width;
-	next.source_height = source_height;
-	next.image_width = image_width;
-	next.image_height = image_height;
-	next.created_monotonic_ms = monotonic_ms();
-
-	history[history_next] = next;
-	history_next = (history_next + 1) % CAPTURE_HISTORY_SIZE;
-	*capture = next;
-	return 0;
+	DeskpalCapture next = {
+		.target = DESKPAL_CAPTURE_WINDOW,
+		.window_id = window_id,
+		.process_id = process_id,
+		.window_x = window_x,
+		.window_y = window_y,
+		.window_width = window_width,
+		.window_height = window_height,
+		.source_width = source_width,
+		.source_height = source_height,
+		.image_width = image_width,
+		.image_height = image_height,
+	};
+	int title_written = snprintf(next.title, sizeof(next.title), "%s", title);
+	int class_written = snprintf(next.app_class, sizeof(next.app_class), "%s", app_class);
+	if (title_written < 0 || (size_t)title_written >= sizeof(next.title) ||
+	    class_written < 0 || (size_t)class_written >= sizeof(next.app_class))
+		return -1;
+	return store_capture(&next, capture);
 }
 
 int captures_lookup(const char *id, DeskpalCapture *capture)

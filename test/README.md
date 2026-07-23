@@ -17,13 +17,14 @@ the user's visible desktop:
 - `e2e_isolation.py`: parent/child routing, Xvfb lifecycle, cleanup, malformed
   session IDs, missing-window safety, OCR, screenshots, and binary replacement.
 - `e2e_computer_use.py`: deterministic Tk workflow for app identity, environment
-  capability/blocker reporting, screenshot scaling metadata,
-  screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
+  capability/blocker reporting, exact capture-bound app-state observations,
+  screenshot scaling metadata, screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
   controller lock contention/release, and isolated-operation independence.
 - `e2e_accessibility.py`: optional AT-SPI tool schemas, unavailable capability,
   bounded semantic tree output, filtering/truncation, logical bounds, actions,
   opt-in attributes/text, privacy redaction, completion metadata, and true
-  focused-element lookup. It also covers verified semantic text/focus/invoke
+  focused-element lookup. It also covers exact app-state semantic filtering,
+  privacy opt-ins, unstable geometry, target replacement, verified semantic text/focus/invoke
   mutations, path and role/name resolution, ambiguity, verification timeout,
   unknown outcomes, same-path/interleaving replacement, DEFUNCT verifier
   rejection, lock contention, protected roles, and isolated-session rejection. Semantic

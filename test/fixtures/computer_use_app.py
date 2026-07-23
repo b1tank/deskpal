@@ -4,6 +4,7 @@
 import tkinter as tk
 import ctypes
 import ctypes.util
+import os
 
 TITLE = "Deskpal Computer Use Fixture"
 
@@ -50,6 +51,13 @@ def register_ewmh_client():
     lib.XChangeProperty(
         display, root_window, client_list, window_atom, 32, 0,
         ctypes.byref(client), 1,
+    )
+    pid_atom = lib.XInternAtom(display, b"_NET_WM_PID", 0)
+    cardinal_atom = lib.XInternAtom(display, b"CARDINAL", 0)
+    process_id = ctypes.c_ulong(os.getpid())
+    lib.XChangeProperty(
+        display, client, pid_atom, cardinal_atom, 32, 0,
+        ctypes.byref(process_id), 1,
     )
     lib.XFlush(display)
     lib.XCloseDisplay(display)

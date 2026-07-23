@@ -1252,11 +1252,12 @@ cJSON *accessibility_status(void)
 	return result;
 }
 
-cJSON *accessibility_tree(const char *application_filter,
-                          const char *window_filter,
-                          int max_depth, int max_nodes,
-						  int include_offscreen, int include_text,
-						  int include_attributes)
+static cJSON *accessibility_tree_scoped(const char *application_filter,
+                                        const char *window_filter,
+                                        int max_depth, int max_nodes,
+                                        int include_offscreen, int include_text,
+                                        int include_attributes,
+                                        int exact_scope)
 {
 	reset_query_errors();
 	cJSON *result = accessibility_status_base();
@@ -1265,6 +1266,7 @@ cJSON *accessibility_tree(const char *application_filter,
 	cJSON_AddBoolToObject(result, "includeOffscreen", include_offscreen);
 	cJSON_AddBoolToObject(result, "includeText", include_text);
 	cJSON_AddBoolToObject(result, "includeAttributes", include_attributes);
+	cJSON_AddBoolToObject(result, "exactScope", exact_scope);
 	cJSON *applications = cJSON_CreateArray();
 	cJSON_AddItemToObject(result, "applications", applications);
 	add_tree_completion_defaults(result);
@@ -1306,7 +1308,7 @@ cJSON *accessibility_tree(const char *application_filter,
 		AtspiAccessible *application = accessible_child(desktop, i);
 		if (!application) continue;
 		char *raw_app_name = accessible_name(application);
-		if (!contains_case_insensitive(raw_app_name, application_filter)) {
+		if (!scope_matches(raw_app_name, application_filter, exact_scope)) {
 			g_free(raw_app_name);
 			g_object_unref(application);
 			continue;
@@ -1335,7 +1337,7 @@ cJSON *accessibility_tree(const char *application_filter,
 			AtspiAccessible *window = accessible_child(application, j);
 			if (!window) continue;
 			char *raw_window_name = accessible_name(window);
-			if (!contains_case_insensitive(raw_window_name, window_filter)) {
+			if (!scope_matches(raw_window_name, window_filter, exact_scope)) {
 				g_free(raw_window_name);
 				g_object_unref(window);
 				continue;
@@ -1417,6 +1419,28 @@ cJSON *accessibility_tree(const char *application_filter,
 #endif
 	end_query();
 	return result;
+}
+
+cJSON *accessibility_tree(const char *application_filter,
+                          const char *window_filter,
+                          int max_depth, int max_nodes,
+                          int include_offscreen, int include_text,
+                          int include_attributes)
+{
+	return accessibility_tree_scoped(application_filter, window_filter,
+		max_depth, max_nodes, include_offscreen, include_text,
+		include_attributes, 0);
+}
+
+cJSON *accessibility_tree_exact(const char *application,
+                                const char *window,
+                                int max_depth, int max_nodes,
+                                int include_offscreen, int include_text,
+                                int include_attributes)
+{
+	return accessibility_tree_scoped(application, window,
+		max_depth, max_nodes, include_offscreen, include_text,
+		include_attributes, 1);
 }
 
 cJSON *accessibility_focused_element(const char *application_filter,

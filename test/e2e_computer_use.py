@@ -22,7 +22,9 @@ from deskpal_client import (
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "test", "fixtures", "computer_use_app.py")
+DUPLICATE_FIXTURE = os.path.join(ROOT, "test", "fixtures", "duplicate_windows.py")
 TITLE = "Deskpal Computer Use Fixture"
+DUPLICATE_TITLE = "Deskpal Duplicate App State Fixture"
 
 
 def require_dependencies():
@@ -81,6 +83,7 @@ def run_suite():
         )
         second = None
         third = None
+        duplicate_fixture = None
         try:
             tools = client.tools()
             screenshot_schema = tool_by_name(tools, "screenshot")["inputSchema"]
@@ -88,6 +91,7 @@ def run_suite():
             launch_schema = tool_by_name(tools, "launch_app")["inputSchema"]
             cursor_move_schema = tool_by_name(tools, "agent_cursor_move")["inputSchema"]
             environment_schema = tool_by_name(tools, "get_environment_status")["inputSchema"]
+            app_state_schema = tool_by_name(tools, "get_app_state")["inputSchema"]
             tool_by_name(tools, "agent_cursor_status")
             tool_by_name(tools, "agent_cursor_hide")
             assert "maxWidth" in screenshot_schema["properties"]
@@ -97,6 +101,8 @@ def run_suite():
             assert cursor_move_schema["required"] == ["captureId", "x", "y"]
             assert cursor_move_schema["properties"]["x"]["type"] == "integer"
             assert "sessionId" in environment_schema["properties"]
+            assert app_state_schema["properties"]["maxWidth"]["default"] == 1920
+            assert app_state_schema["properties"]["includeText"]["default"] is False
 
             environment = json.loads(text(client.tool("get_environment_status")))
             assert environment["scope"] == "visible-desktop", environment
@@ -194,6 +200,84 @@ def run_suite():
                 "coordinateScaleX": 1,
                 "coordinateScaleY": 1,
             }, original["screenshot"]
+
+            app_state_result = client.tool(
+                "get_app_state",
+                {"windowName": TITLE, "maxWidth": 360, "maxHeight": 260},
+            )
+            assert png_size(app_state_result) == (360, 260), png_size(app_state_result)
+            app_state = app_state_result["appState"]
+            assert app_state == json.loads(text(app_state_result, 1)), app_state
+            assert app_state["target"]["title"] == TITLE, app_state
+            assert app_state["target"]["class"] == "Tk", app_state
+            assert app_state["target"]["processId"] > 0, app_state
+            assert app_state["target"]["geometry"] == {
+                "x": 40, "y": 40, "width": 720, "height": 520,
+            }, app_state
+            assert app_state["image"] == {
+                "sourceWidth": 720,
+                "sourceHeight": 520,
+                "imageWidth": 360,
+                "imageHeight": 260,
+                "coordinateScaleX": 2,
+                "coordinateScaleY": 2,
+            }, app_state
+            assert app_state["transform"] == {
+                "imageSpace": "window-image-pixels",
+                "targetSpace": "desktop-stage-pixels",
+                "offsetX": 40,
+                "offsetY": 40,
+                "scaleX": 2,
+                "scaleY": 2,
+                "supported": True,
+            }, app_state
+            assert app_state["captureId"].startswith("capture-"), app_state
+            assert app_state["consistency"] == {
+                "identityStable": True,
+                "geometryStable": True,
+                "focusStable": True,
+                "transformSupported": True,
+                "stable": True,
+                "retryRecommended": False,
+            }, app_state
+            assert app_state["semantic"]["available"] is False, app_state
+            assert app_state["semantic"]["includeText"] is False, app_state
+            assert app_state["semantic"]["includeAttributes"] is False, app_state
+            assert app_state["inputDelivered"] is False, app_state
+            by_id = client.tool(
+                "get_app_state",
+                {"windowId": app_state["target"]["windowId"], "maxWidth": 360},
+            )
+            assert by_id["appState"]["target"]["windowId"] == app_state["target"]["windowId"]
+            client.tool(
+                "resize_window",
+                {"windowId": app_state["target"]["windowId"], "width": 700, "height": 500},
+            )
+            time.sleep(0.1)
+            stale_app_capture = client.tool(
+                "agent_cursor_move",
+                {"captureId": app_state["captureId"], "x": 100, "y": 100},
+            )
+            assert stale_app_capture.get("isError") is True, stale_app_capture
+            assert "geometry changed" in text(stale_app_capture), stale_app_capture
+            client.tool(
+                "resize_window",
+                {"windowId": app_state["target"]["windowId"], "width": 720, "height": 520},
+            )
+            for invalid_target in (
+                {},
+                {"windowName": TITLE, "windowId": app_state["target"]["windowId"]},
+            ):
+                invalid_state = client.tool("get_app_state", invalid_target)
+                assert invalid_state.get("isError") is True, invalid_state
+            for unavailable_name in ("Computer Use", TITLE.lower()):
+                unsupported_state = client.tool(
+                    "get_app_state", {"windowName": unavailable_name}
+                )
+                assert unsupported_state.get("isError") is True, unsupported_state
+                assert unsupported_state["appStateError"]["code"] == (
+                    "target_not_found_or_unsupported_backend"
+                ), unsupported_state
 
             desktop_capture = client.tool(
                 "screenshot", {"fullScreen": True, "maxWidth": 640}
@@ -480,6 +564,9 @@ def run_suite():
                 ("type_text", {"windowName": TITLE, "text": "x", "delay": 2**31}),
                 ("resize_window", {"windowName": TITLE, "width": 2**31, "height": 1}),
                 ("screenshot", {"windowName": TITLE, "maxWidth": 1.5}),
+                ("get_app_state", {"windowName": TITLE, "maxWidth": 1.5}),
+                ("get_app_state", {"windowName": TITLE, "semanticMaxNodes": 2**31}),
+                ("get_app_state", {"windowName": TITLE, "includeText": "yes"}),
                 ("wait_for_window", {"name": "missing", "timeout": 2**31}),
             )
             for tool_name, arguments in extreme_cases:
@@ -508,6 +595,40 @@ def run_suite():
             time.sleep(0.3)
             assert "No window found" in text(client.tool("find_window", {"name": TITLE}))
 
+            duplicate_fixture = subprocess.Popen(
+                [sys.executable, DUPLICATE_FIXTURE],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.time() + 3
+            ambiguous_state = None
+            while time.time() < deadline:
+                ambiguous_state = client.tool(
+                    "get_app_state", {"windowName": DUPLICATE_TITLE}
+                )
+                if ambiguous_state.get("appStateError", {}).get("code") == "target_ambiguous":
+                    break
+                if duplicate_fixture.poll() is not None:
+                    raise AssertionError(
+                        f"duplicate fixture exited: {duplicate_fixture.stderr.read()}"
+                    )
+                time.sleep(0.05)
+            assert ambiguous_state is not None, ambiguous_state
+            assert ambiguous_state.get("isError") is True, ambiguous_state
+            assert ambiguous_state["appStateError"]["code"] == "target_ambiguous"
+            duplicate_fixture.terminate()
+            duplicate_fixture.wait(timeout=3)
+            duplicate_fixture = None
+            subprocess.run(
+                ["xprop", "-root", "-remove", "_NET_CLIENT_LIST"],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+
             client.close()
             client = None
             third = DeskpalClient(
@@ -527,6 +648,8 @@ def run_suite():
             )
             assert "lock-successor" in text(successor), successor
         finally:
+            if duplicate_fixture is not None:
+                stop_process(duplicate_fixture)
             if third is not None:
                 third.close()
             if second is not None:

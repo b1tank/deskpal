@@ -72,10 +72,11 @@ real delivery route separately.
 
 ## Deskpal and Pi hello world
 
-A full-screen `screenshot` now returns a short-lived `captureId`. Deskpal exposes
-`agent_cursor_status`, `agent_cursor_move`, and `agent_cursor_hide`; the Pi
-extension registers them with the usual `deskpal_` prefix. Move coordinates are
-pixels in the captured image, including when that image was downscaled. Deskpal
+A full-screen `screenshot` and stable exact-window `get_app_state` observation
+return a short-lived `captureId`. Deskpal exposes `agent_cursor_status`,
+`agent_cursor_move`, and `agent_cursor_hide`; the Pi extension registers them
+with the usual `deskpal_` prefix. Move coordinates are pixels in the captured
+image, including when that image was downscaled. Deskpal
 rejects unknown, evicted, stale, out-of-bounds, or geometry-mismatched captures
 before issuing an indicator mutation.
 

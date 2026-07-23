@@ -337,10 +337,25 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 		    !integer_in_range(offset, "y", -4096, 4096)))
 			return mcp_tool_error_result("offset x/y must be integral pixels between -4096 and 4096");
 	}
-	if (strcmp(tool_name, "screenshot") == 0 &&
+	if ((strcmp(tool_name, "screenshot") == 0 ||
+	     strcmp(tool_name, "get_app_state") == 0) &&
 	    (!integer_in_range(arguments, "maxWidth", 0, 8192) ||
 	     !integer_in_range(arguments, "maxHeight", 0, 8192)))
 		return mcp_tool_error_result("maxWidth/maxHeight must be integers between 0 and 8192");
+	if (strcmp(tool_name, "get_app_state") == 0) {
+		if (!integer_in_range(arguments, "semanticMaxDepth", 1, 8) ||
+		    !integer_in_range(arguments, "semanticMaxNodes", 1, 300))
+			return mcp_tool_error_result(
+				"semanticMaxDepth must be an integer between 1 and 8 and semanticMaxNodes between 1 and 300");
+		if (!bounded_string_if_present(arguments, "windowId", 64) ||
+		    !bounded_string_if_present(arguments, "windowName", 255))
+			return mcp_tool_error_result(
+				"windowId/windowName must be non-empty bounded strings");
+		if (!boolean_if_present(arguments, "includeText") ||
+		    !boolean_if_present(arguments, "includeAttributes"))
+			return mcp_tool_error_result(
+				"includeText/includeAttributes must be booleans");
+	}
 	if (strcmp(tool_name, "read_screen_text") == 0) {
 		const cJSON *region = arguments
 			? cJSON_GetObjectItem(arguments, "region") : NULL;

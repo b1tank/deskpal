@@ -39,6 +39,12 @@ int x11_list_windows(WindowInfo *out, int max_count, const char *name_filter,
 /* Find best-matching window by name. Returns window ID or 0. */
 unsigned long x11_find_window(const char *name);
 
+/* Resolve an exact, case-sensitive title across managed windows. Returns the
+ * total match count and the first match; complete is false after traversal
+ * errors so callers can fail closed instead of accepting a partial result. */
+int x11_find_window_exact(const char *name, WindowInfo *first,
+                          int *match_count, int *complete);
+
 /* Find a managed application window by title or WM_CLASS. */
 unsigned long x11_find_app(const char *name);
 

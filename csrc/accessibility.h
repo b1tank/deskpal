@@ -19,6 +19,11 @@ cJSON *accessibility_tree(const char *application_filter,
                           int max_depth, int max_nodes,
                           int include_offscreen, int include_text,
                           int include_attributes);
+cJSON *accessibility_tree_exact(const char *application,
+                                const char *window,
+                                int max_depth, int max_nodes,
+                                int include_offscreen, int include_text,
+                                int include_attributes);
 cJSON *accessibility_focused_element(const char *application_filter,
                                      const char *window_filter,
                                      int include_text);

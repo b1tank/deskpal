@@ -71,6 +71,10 @@ stageX  = windowX + sourceX
 stageY  = windowY + sourceY
 ```
 
+A stable window `captureId` can be passed directly to `agent_cursor_move`; that
+tool revalidates the recorded identity and geometry before resolving the image
+point through this transform.
+
 The first implementation supports one monitor covering the full GNOME stage.
 Other layouts return a structured unsupported result until per-monitor capture
 transforms are available.

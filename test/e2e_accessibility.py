@@ -13,6 +13,7 @@ import time
 from deskpal_client import (
     DESKPAL,
     DeskpalClient,
+    png_size,
     start_xvfb,
     stop_process,
     text,
@@ -173,6 +174,56 @@ def run_rich_suite(env):
         assert tree["partial"] is False, tree
         assert tree["queryFailed"] is False, tree
         nodes = find_nodes(tree)
+
+        app_state_result = client.tool(
+            "get_app_state",
+            {
+                "windowName": TITLE,
+                "maxWidth": 400,
+                "maxHeight": 300,
+                "semanticMaxNodes": 100,
+            },
+        )
+        app_state = app_state_result["appState"]
+        assert png_size(app_state_result)[0] <= 400, app_state
+        assert png_size(app_state_result)[1] <= 300, app_state
+        assert app_state["target"]["title"] == TITLE, app_state
+        assert app_state["target"]["processId"] == fixture.pid, app_state
+        assert app_state["consistency"]["stable"] is True, app_state
+        assert app_state["captureId"].startswith("capture-"), app_state
+        semantic_state = app_state["semantic"]
+        assert semantic_state["available"] is True, semantic_state
+        assert semantic_state["exactScope"] is True, semantic_state
+        assert semantic_state["targetProcessMatched"] is True, semantic_state
+        assert semantic_state["targetWindowMatched"] is True, semantic_state
+        assert semantic_state["matchedApplicationCount"] == 1, semantic_state
+        assert semantic_state["matchedWindowCount"] == 1, semantic_state
+        assert semantic_state["nodeCount"] >= 5, semantic_state
+        assert semantic_state["includeText"] is False, semantic_state
+        assert semantic_state["includeAttributes"] is False, semantic_state
+        private_state = client.tool(
+            "get_app_state",
+            {
+                "windowId": app_state["target"]["windowId"],
+                "includeText": True,
+                "includeAttributes": True,
+            },
+        )["appState"]["semantic"]
+        assert private_state["includeText"] is True, private_state
+        assert private_state["includeAttributes"] is True, private_state
+        private_nodes = find_nodes(private_state)
+        private_entry = next(
+            node for node in private_nodes if node["name"] == "Validation message"
+        )
+        assert private_entry["text"] == "", private_entry
+        assert private_entry["attributes"]["placeholder-text"] == (
+            "Enter a semantic value"
+        ), private_entry
+        private_password = next(
+            node for node in private_nodes if node["role"] == "password text"
+        )
+        assert private_password["textProtected"] is True, private_password
+        assert "text" not in private_password, private_password
 
         exact_limit = client.tool(
             "get_accessibility_tree",
@@ -1128,6 +1179,83 @@ def run_rich_suite(env):
         assert stalled_payload["incomplete"] is True, stalled_payload
         assert stalled_payload["completed"] is False, stalled_payload
         assert stalled_payload["queryErrorCount"] > 0, stalled_payload
+
+        unstable_result = {}
+        unstable_error = {}
+
+        def observe_while_resizing():
+            try:
+                unstable_result["value"] = client.tool(
+                    "get_app_state",
+                    {"windowName": STALLED_TITLE, "maxWidth": 500},
+                )
+            except BaseException as error:
+                unstable_error["value"] = error
+
+        observer = threading.Thread(target=observe_while_resizing, daemon=True)
+        observer.start()
+        time.sleep(0.2)
+        resized = subprocess.run(
+            [
+                "xdotool", "search", "--onlyvisible", "--name",
+                f"^{STALLED_TITLE}$", "windowsize", "%@", "600", "400",
+            ],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        assert resized.returncode == 0, resized.returncode
+        observer.join(timeout=3.5)
+        if observer.is_alive():
+            client.proc.kill()
+            client.proc.wait(timeout=2)
+            client = None
+            raise AssertionError("get_app_state exceeded external 3.5s watchdog")
+        if unstable_error:
+            raise unstable_error["value"]
+        unstable = unstable_result["value"]
+        assert unstable.get("isError") is not True, unstable
+        unstable_state = unstable["appState"]
+        assert unstable_state["consistency"]["identityStable"] is True, unstable_state
+        assert unstable_state["consistency"]["geometryStable"] is False, unstable_state
+        assert unstable_state["consistency"]["stable"] is False, unstable_state
+        assert unstable_state["consistency"]["retryRecommended"] is True, unstable_state
+        assert unstable_state["consistency"]["geometryAfter"] != (
+            unstable_state["target"]["geometry"]
+        ), unstable_state
+        assert "captureId" not in unstable_state, unstable_state
+
+        replaced_result = {}
+        replaced_error = {}
+
+        def observe_while_exiting():
+            try:
+                replaced_result["value"] = client.tool(
+                    "get_app_state", {"windowName": STALLED_TITLE}
+                )
+            except BaseException as error:
+                replaced_error["value"] = error
+
+        replacement_observer = threading.Thread(
+            target=observe_while_exiting, daemon=True
+        )
+        replacement_observer.start()
+        time.sleep(0.2)
+        stalled_fixture.terminate()
+        stalled_fixture.wait(timeout=2)
+        replacement_observer.join(timeout=3.5)
+        if replacement_observer.is_alive():
+            client.proc.kill()
+            client.proc.wait(timeout=2)
+            client = None
+            raise AssertionError("replacement observation exceeded watchdog")
+        if replaced_error:
+            raise replaced_error["value"]
+        replaced = replaced_result["value"]
+        assert replaced.get("isError") is True, replaced
+        assert replaced["appStateError"]["code"] == (
+            "target_replaced_during_observation"
+        ), replaced
     finally:
         if client is not None:
             client.close()
