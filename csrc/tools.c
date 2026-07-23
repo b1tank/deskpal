@@ -1281,33 +1281,37 @@ static int semantic_action_is_listed(const cJSON *node, const char *action)
 	return 0;
 }
 
-static cJSON *semantic_press_error_result(const char *code,
-                                          const char *message,
-                                          int retry_recommended)
+static cJSON *semantic_mutation_error_result(const char *metadata_key,
+                                             const char *code,
+                                             const char *message,
+                                             int retry_recommended)
 {
 	cJSON *payload = cJSON_CreateObject();
 	cJSON_AddStringToObject(payload, "code", code);
 	cJSON_AddStringToObject(payload, "message", message);
 	cJSON_AddBoolToObject(payload, "retryRecommended", retry_recommended);
-	cJSON *result = structured_text_result(payload, "semanticPressError");
+	cJSON *result = structured_text_result(payload, metadata_key);
 	cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
 
-cJSON *tool_agent_semantic_press(const cJSON *params)
+static cJSON *tool_agent_semantic_mutation(const cJSON *params, int set_text)
 {
 	const char *capture_id = json_str(params, "captureId", NULL);
 	const char *action = json_str(params, "action", NULL);
+	const char *value = json_str(params, "value", NULL);
 	const char *cursor_id = json_str(params, "cursorId", "primary");
 	const char *color = json_str(params, "color", "#36C5F0");
 	const char *label = json_str(params, "label", cursor_id);
 	const cJSON *target = cJSON_GetObjectItem(params, "target");
 	const cJSON *verify = cJSON_GetObjectItem(params, "verify");
 	int timeout_ms = json_int(params, "timeoutMs", 3000);
-	if (!capture_id || !capture_id[0] || !action || !action[0] ||
-	    !cJSON_IsObject(target) || !cJSON_IsObject(verify))
-		return mcp_tool_error_result(
-			"captureId, action, complete target locator, and verify are required");
+	if (!capture_id || !capture_id[0] || !cJSON_IsObject(target) ||
+	    (set_text && !value) ||
+	    (!set_text && (!action || !action[0] || !cJSON_IsObject(verify))))
+		return mcp_tool_error_result(set_text
+			? "captureId, value, and complete target locator are required"
+			: "captureId, action, complete target locator, and verify are required");
 
 	DeskpalCapture capture;
 	int lookup = captures_lookup(capture_id, &capture);
@@ -1335,7 +1339,8 @@ cJSON *tool_agent_semantic_press(const cJSON *params)
 	const cJSON *supported = cJSON_GetObjectItem(transform, "supported");
 	if (!cJSON_IsTrue(supported)) {
 		cJSON_Delete(semantic);
-		cJSON *result = semantic_press_error_result(
+		cJSON *result = semantic_mutation_error_result(
+			set_text ? "semanticSetTextError" : "semanticPressError",
 			"semantic_transform_unavailable",
 			"Fresh semantic bounds could not be verified against the captured window",
 			1);
@@ -1358,7 +1363,7 @@ cJSON *tool_agent_semantic_press(const cJSON *params)
 			match_count == 0 ? "Semantic target locator is stale or unavailable" :
 			"Semantic target locator is ambiguous");
 	}
-	if (!semantic_action_is_listed(match, action)) {
+	if (!set_text && !semantic_action_is_listed(match, action)) {
 		cJSON_Delete(semantic);
 		cJSON_Delete(transform);
 		return mcp_tool_error_result(
@@ -1450,7 +1455,7 @@ cJSON *tool_agent_semantic_press(const cJSON *params)
 		cJSON_Delete(semantic);
 		cJSON_Delete(transform);
 		return mcp_tool_error_result(
-			"Fresh semantic press target requires a non-empty accessible name");
+			"Fresh semantic mutation target requires a non-empty accessible name");
 	}
 	/* AT-SPI object paths can be replaced as toolkit proxies are recreated.
 	 * The complete capture locator above proves which fresh node was intended;
@@ -1463,9 +1468,14 @@ cJSON *tool_agent_semantic_press(const cJSON *params)
 	cJSON_AddStringToObject(action_params, "application", application_name);
 	cJSON_AddStringToObject(action_params, "window", window_name);
 	cJSON_AddItemToObject(action_params, "target", action_target);
-	cJSON_AddStringToObject(action_params, "operation", "invoke");
-	cJSON_AddStringToObject(action_params, "action", action);
-	cJSON_AddItemToObject(action_params, "verify", cJSON_Duplicate(verify, 1));
+	cJSON_AddStringToObject(action_params, "operation",
+	                      set_text ? "setText" : "invoke");
+	if (set_text)
+		cJSON_AddStringToObject(action_params, "value", value);
+	else {
+		cJSON_AddStringToObject(action_params, "action", action);
+		cJSON_AddItemToObject(action_params, "verify", cJSON_Duplicate(verify, 1));
+	}
 	cJSON_AddNumberToObject(action_params, "timeoutMs", timeout_ms);
 	unsigned long focus_before = x11_get_active_window();
 	cJSON *action_result = accessibility_action(action_params);
@@ -1480,6 +1490,8 @@ cJSON *tool_agent_semantic_press(const cJSON *params)
 
 	cJSON *payload = cJSON_CreateObject();
 	cJSON_AddStringToObject(payload, "route", "atspi");
+	cJSON_AddStringToObject(payload, "operation",
+	                      set_text ? "setText" : "invoke");
 	cJSON_AddStringToObject(payload, "captureId", capture_id);
 	cJSON_AddBoolToObject(payload, "indicatorMoved", 1);
 	cJSON_AddBoolToObject(payload, "sharedPointerMoved", 0);
@@ -1511,9 +1523,20 @@ cJSON *tool_agent_semantic_press(const cJSON *params)
 	int verified = cJSON_IsTrue(cJSON_GetObjectItem(action_result, "verified"));
 	cJSON_AddBoolToObject(payload, "verified", verified);
 	cJSON_Delete(semantic);
-	cJSON *result = structured_text_result(payload, "semanticPress");
+	cJSON *result = structured_text_result(payload,
+	                                     set_text ? "semanticSetText" : "semanticPress");
 	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
+}
+
+cJSON *tool_agent_semantic_press(const cJSON *params)
+{
+	return tool_agent_semantic_mutation(params, 0);
+}
+
+cJSON *tool_agent_semantic_set_text(const cJSON *params)
+{
+	return tool_agent_semantic_mutation(params, 1);
 }
 
 /* ── environment status ──────────────────────────────────────────────────── */
@@ -1578,6 +1601,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                      indicator_available ? "gnome-shell-dbus" : "unavailable");
 	cJSON_AddStringToObject(backends, "semanticPress",
 	                      semantic_press_available ? "atspi-with-agent-cursor" : "unavailable");
+	cJSON_AddStringToObject(backends, "semanticSetText",
+	                      semantic_press_available ? "atspi-with-agent-cursor" : "unavailable");
 	cJSON_AddItemToObject(payload, "selectedBackends", backends);
 
 	cJSON *capabilities = cJSON_CreateObject();
@@ -1602,6 +1627,10 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                         indicator_available ? "gnome-shell-dbus" : "unavailable",
 	                         0, indicator_available));
 	cJSON_AddItemToObject(capabilities, "semanticPress",
+	                     environment_capability(semantic_press_available,
+	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
+	                         0, 0));
+	cJSON_AddItemToObject(capabilities, "semanticSetText",
 	                     environment_capability(semantic_press_available,
 	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
 	                         0, 0));
@@ -3687,6 +3716,29 @@ void tools_register_all(void)
 		"  \"required\": [\"captureId\", \"target\", \"action\", \"verify\"]"
 		"}",
 		tool_agent_semantic_press);
+
+	mcp_register_tool("agent_semantic_set_text",
+		"Move this process's logical cursor to a freshly re-resolved accessible text control from a stable get_app_state capture, set text through AT-SPI without keyboard or clipboard input, and verify the exact value. Never falls back to shared-pointer or keyboard input. Complete path locators require busName, objectPath, and processId.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"target\": {\"type\": \"object\", \"properties\": {"
+		"      \"role\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 128},"
+		"      \"path\": {\"type\": \"array\", \"maxItems\": 32, \"items\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 4096}},"
+		"      \"busName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255},"
+		"      \"objectPath\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 1024},"
+		"      \"processId\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 2147483647}"
+		"    }, \"required\": [\"role\", \"path\", \"busName\", \"objectPath\", \"processId\"]},"
+		"    \"value\": {\"type\": \"string\", \"maxLength\": 2048},"
+		"    \"cursorId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 40, \"default\": \"primary\"},"
+		"    \"color\": {\"type\": \"string\", \"pattern\": \"^#[0-9A-Fa-f]{6}$\", \"default\": \"#36C5F0\"},"
+		"    \"label\": {\"type\": \"string\", \"maxLength\": 48},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 3000}"
+		"  },"
+		"  \"required\": [\"captureId\", \"target\", \"value\"]"
+		"}",
+		tool_agent_semantic_set_text);
 
 	mcp_register_tool("list_windows",
 		"List top-level application windows on the user's desktop by default, or in an isolated verification session when sessionId is supplied. Set includeAll for recursive helper/dialog discovery.",

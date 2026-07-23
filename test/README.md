@@ -80,8 +80,8 @@ npm run test:live
 They require a real X11/Xwayland display, `/dev/uinput` access for full input
 coverage, and the named applications. `test:indicator-live` additionally
 requires the installed GNOME extension and verifies full/downscaled capture
-mapping, edge placement, restyling, a capture-bound verified semantic press,
-cross-process isolation, graceful and forced-death cleanup, and
+mapping, edge placement, restyling, capture-bound verified semantic press and
+text replacement, cross-process isolation, graceful and forced-death cleanup, and
 pointer/focus/stacking/clipboard non-interference.
 Screenshot artifacts go under `/tmp`.
 Capability-dependent cases print `BLOCK` when the visible surface is native

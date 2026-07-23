@@ -28,7 +28,7 @@ compatibility mechanisms differ from that plan, `plan.md` is authoritative.
 | Launch and focus applications | Yes | Yes | Parity |
 | Resize windows | Yes | Yes | Parity |
 | Window/app discovery | Approved apps only | EWMH top-level windows with `WM_CLASS`; `includeAll` for recursive dialog/helper discovery | Different, now cleaner |
-| Semantic element discovery/action | Native app accessibility integration | Bounded AT-SPI tree/focus inspection, verified `setText`/`focus`/named actions, and capture-bound `agent_semantic_press` with logical-cursor motion and no shared-pointer fallback | Partial parity |
+| Semantic element discovery/action | Native app accessibility integration | Bounded AT-SPI tree/focus inspection, verified actions, capture-bound `agent_semantic_press`, and cursor-coupled `agent_semantic_set_text` without pointer/keyboard/clipboard fallback | Partial parity |
 | One controller at a time | Machine-wide session lock | Lazy per-user machine lock for visible-desktop mutations | Parity for arbitration |
 | Stop current action | Global Esc or Ctrl+C | Client cancellation/stdio shutdown and per-tool timeouts | Missing global hotkey |
 | App approval | Prompt once per app/session | MCP-host approval only; no per-app prompt | Missing |

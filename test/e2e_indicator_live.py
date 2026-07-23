@@ -154,6 +154,7 @@ def run_suite():
         assert environment["scope"] == "visible-desktop", environment
         assert environment["capabilities"]["agentCursor"]["available"] is True, environment
         assert environment["capabilities"]["semanticPress"]["available"] is True, environment
+        assert environment["capabilities"]["semanticSetText"]["available"] is True, environment
         assert environment["capabilities"]["backgroundPixelInput"]["available"] is False, environment
         blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
         assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
@@ -210,9 +211,14 @@ def run_suite():
                 "after": app_state_after[key],
             }
 
+        semantic_nodes = find_semantic_nodes(app_state["semantic"])
         semantic_button = next(
-            node for node in find_semantic_nodes(app_state["semantic"])
+            node for node in semantic_nodes
             if node.get("name") == "Apply validation message"
+        )
+        semantic_entry = next(
+            node for node in semantic_nodes
+            if node.get("name") == "Validation message"
         )
         press_baseline = desktop_state()
         press_arguments = {
@@ -264,6 +270,32 @@ def run_suite():
         assert ambiguous_press["inputDelivered"] is False, ambiguous_press
         assert ambiguous_press["action"]["targetMatchCount"] == 2, ambiguous_press
         owner.tool("agent_cursor_hide", {"cursorId": "semantic-ambiguous"})
+        set_text_arguments = {
+            "captureId": app_state["captureId"],
+            "target": semantic_entry["locator"],
+            "value": "semantic live value",
+            "cursorId": "semantic-text-live",
+            "color": "#8B5CF6",
+            "label": "semantic text",
+        }
+        set_text_result = owner.tool(
+            "agent_semantic_set_text", set_text_arguments
+        )
+        set_text_action = json.loads(text(set_text_result))
+        assert set_text_action["route"] == "atspi", set_text_action
+        assert set_text_action["operation"] == "setText", set_text_action
+        assert set_text_action["verified"] is True, set_text_action
+        assert set_text_action["actionApplied"] is True, set_text_action
+        assert set_text_action["inputDelivered"] is True, set_text_action
+        assert set_text_action["sharedPointerMoved"] is False, set_text_action
+        assert set_text_action["clipboardChanged"] is False, set_text_action
+        idempotent_text = json.loads(
+            text(owner.tool("agent_semantic_set_text", set_text_arguments))
+        )
+        assert idempotent_text["verified"] is True, idempotent_text
+        assert idempotent_text["actionApplied"] is False, idempotent_text
+        assert idempotent_text["inputDelivered"] is False, idempotent_text
+        owner.tool("agent_cursor_hide", {"cursorId": "semantic-text-live"})
         press_hidden = json.loads(
             text(owner.tool("agent_cursor_hide", {"cursorId": "semantic-live"}))
         )

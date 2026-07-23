@@ -116,6 +116,7 @@ def run_suite():
                 "nonInterfering": False,
             }, environment
             assert environment["capabilities"]["semanticPress"]["available"] is False
+            assert environment["capabilities"]["semanticSetText"]["available"] is False
             assert environment["capabilities"]["processLaunch"]["available"] is True
             assert environment["capabilities"]["filesystem"]["available"] is False
             blocker_ids = {blocker["id"] for blocker in environment["blockers"]}

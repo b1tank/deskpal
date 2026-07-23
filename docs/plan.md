@@ -111,6 +111,8 @@ broker actions will drive.
       menu, toggle, and expandable-control operations.
   - [x] Ship capture-bound verified [`agent_semantic_press`](semantic-actions.md)
         with logical-cursor motion and no shared-pointer fallback.
+  - [x] Ship capture-bound verified `agent_semantic_set_text` without keyboard
+        or clipboard fallback.
 - [ ] Test an explicit, user-approved session accessibility setup that lets
       already-running Chromium/Electron apps expose rich AT-SPI trees. Never
       change the setting silently.

@@ -1,9 +1,10 @@
 # Capture-bound semantic actions
 
-`agent_semantic_press` is Deskpal's first end-to-end non-pointer action route.
-It connects an exact `get_app_state` observation, the logical agent cursor, and
-a verified AT-SPI invoke without falling back to XTest, uinput, forced focus, or
-coordinate clicking.
+`agent_semantic_press` and `agent_semantic_set_text` are Deskpal's first
+end-to-end non-pointer action routes. They connect an exact `get_app_state`
+observation, the logical agent cursor, and a verified AT-SPI mutation without
+falling back to XTest, uinput, forced focus, coordinate clicking, keyboard
+input, or clipboard replacement.
 
 ## Contract
 
@@ -12,8 +13,10 @@ The caller supplies:
 - a stable window `captureId` from `get_app_state`;
 - a complete semantic target locator copied from that observation (`role`,
   `path`, `busName`, `objectPath`, and `processId`);
-- one action advertised by that target, such as `click`; and
-- an explicit text and/or state verification selector.
+- for `agent_semantic_press`, one action advertised by that target, such as
+  `click`, plus an explicit text and/or state verification selector; or
+- for `agent_semantic_set_text`, the exact replacement value. AT-SPI text
+  mutation supplies its own exact-value verification.
 
 Deskpal revalidates the captured X11 identity and geometry, refreshes the exact
 AT-SPI window, filters it to the captured PID, re-resolves the complete locator,
@@ -23,9 +26,10 @@ can be replaced as proxies are recreated, final invoke dispatch re-resolves the
 fresh node by its exact non-empty role/name and rejects ambiguity immediately
 before mutation. The requested postcondition is always verified.
 
-The result reports the `atspi` route, cursor result, semantic target and
-transform, underlying action result, mutation and verification state, and
-whether focus changed. `sharedPointerMoved` is always false for this route.
+The result reports the `atspi` route, operation, cursor result, semantic target
+and transform, underlying action result, mutation and verification state, and
+whether focus changed. `sharedPointerMoved` and `clipboardChanged` are always
+false for these routes.
 Unknown action outcomes are returned as unknown and are never retried blindly.
 
 ## Transform verification
@@ -56,5 +60,6 @@ application mutation.
   events/frame diffs are planned to tighten this interval further.
 - Focus changes are measured when X11 focus is knowable. Stacking changes are
   currently reported as unknown rather than falsely claimed unchanged.
-- This first slice implements invoke/press only. Toggle, selection, value,
-  text-range, scroll, menu, and expandable-control routes remain future work.
+- These first slices implement invoke/press and whole-value text replacement.
+  Toggle, selection, generic value, text-range, scroll, menu, and
+  expandable-control routes remain future work.

@@ -21,6 +21,7 @@ cJSON *tool_agent_cursor_status(const cJSON *params);
 cJSON *tool_agent_cursor_move(const cJSON *params);
 cJSON *tool_agent_cursor_hide(const cJSON *params);
 cJSON *tool_agent_semantic_press(const cJSON *params);
+cJSON *tool_agent_semantic_set_text(const cJSON *params);
 cJSON *tool_list_windows(const cJSON *params);
 cJSON *tool_find_window(const cJSON *params);
 cJSON *tool_focus_window(const cJSON *params);

@@ -403,6 +403,17 @@ def run_rich_suite(env):
         assert unavailable_indicator_press.get("isError") is True
         assert "indicator" in text(unavailable_indicator_press).lower()
         assert visible_text("Apply count") == "Apply count: 0"
+        unavailable_indicator_text = client.tool(
+            "agent_semantic_set_text",
+            {
+                "captureId": app_state["captureId"],
+                "target": app_state_entry["locator"],
+                "value": "must-not-apply",
+            },
+        )
+        assert unavailable_indicator_text.get("isError") is True
+        assert "indicator" in text(unavailable_indicator_text).lower()
+        assert visible_text("Validation message") == ""
 
         set_text_result = client.tool(
             "accessibility_action",
@@ -1237,6 +1248,23 @@ def run_rich_suite(env):
         )
         assert routed_press.get("isError") is True, routed_press
         assert "visible desktop only" in text(routed_press), routed_press
+        routed_set_text = client.tool(
+            "agent_semantic_set_text",
+            {
+                "sessionId": isolated_id,
+                "captureId": "capture-dummy",
+                "target": {
+                    "role": "text",
+                    "path": [0],
+                    "busName": ":1.1",
+                    "objectPath": "/dummy",
+                    "processId": 1,
+                },
+                "value": "blocked",
+            },
+        )
+        assert routed_set_text.get("isError") is True, routed_set_text
+        assert "visible desktop only" in text(routed_set_text), routed_set_text
         client.tool("close_isolated_session", {"sessionId": isolated_id})
 
         direct_env = env.copy()
@@ -1408,6 +1436,7 @@ def main():
                     "get_focused_element",
                     "accessibility_action",
                     "agent_semantic_press",
+                    "agent_semantic_set_text",
                 ):
                     tool = tool_by_name(tools, name)
                     assert "sessionId" not in tool["inputSchema"]["properties"], tool
@@ -1451,6 +1480,16 @@ def main():
                     "role", "path", "busName", "objectPath", "processId"
                 }
                 assert press_schema["properties"]["timeoutMs"]["default"] == 3000
+                set_text_schema = tool_by_name(
+                    tools, "agent_semantic_set_text"
+                )["inputSchema"]
+                assert set_text_schema["required"] == [
+                    "captureId", "target", "value"
+                ]
+                assert set(set_text_schema["properties"]["target"]["required"]) == {
+                    "role", "path", "busName", "objectPath", "processId"
+                }
+                assert set_text_schema["properties"]["timeoutMs"]["default"] == 3000
                 verify_conditions = action_schema["properties"]["verify"]["allOf"]
                 assert {
                     "busName", "objectPath", "processId"
