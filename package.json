@@ -24,14 +24,19 @@
     "build:no-atspi": "meson setup build-no-atspi --reconfigure -Datspi=disabled 2>/dev/null || meson setup build-no-atspi -Datspi=disabled; ninja -C build-no-atspi",
     "build:asan": "meson setup build-asan --reconfigure -Db_sanitize=address,undefined -Db_lundef=false 2>/dev/null || meson setup build-asan -Db_sanitize=address,undefined -Db_lundef=false; ninja -C build-asan",
     "test": "npm run test:safe",
-    "test:safe": "python3 test/e2e_isolation.py && python3 test/e2e_computer_use.py && python3 test/e2e_accessibility.py",
+    "test:safe": "python3 test/indicator_contract.py && python3 test/e2e_isolation.py && python3 test/e2e_computer_use.py && python3 test/e2e_accessibility.py",
+    "test:indicator": "python3 test/indicator_contract.py",
+    "test:indicator-live": "python3 test/e2e_indicator_live.py",
+    "indicator:install": "scripts/indicator.sh install",
+    "indicator:demo": "scripts/indicator.sh demo",
+    "indicator:clear": "scripts/indicator.sh clear",
     "test:isolation": "python3 test/e2e_isolation.py",
     "test:computer-use": "python3 test/e2e_computer_use.py",
     "test:accessibility": "python3 test/e2e_accessibility.py",
     "test:asan": "npm run build:asan && ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1 DESKPAL_TEST_BINARY=$PWD/build-asan/deskpal npm run test:safe",
     "test:desktop": "python3 test/e2e_desktop.py",
     "test:sysmon": "python3 test/e2e_sysmon.py",
-    "test:live": "sh -c 'status=0; npm run test:desktop || status=1; npm run test:sysmon || status=1; exit $status'"
+    "test:live": "sh -c 'status=0; npm run test:desktop || status=1; npm run test:sysmon || status=1; npm run test:indicator-live || status=1; exit $status'"
   },
   "repository": {
     "type": "git",

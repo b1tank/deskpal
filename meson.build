@@ -33,6 +33,8 @@ core_src = files(
   'csrc/x11.c',
   'csrc/uinput.c',
   'csrc/screenshot.c',
+  'csrc/captures.c',
+  'csrc/indicator.c',
   'csrc/ocr.c',
   'csrc/tools.c',
   'csrc/sessions.c',

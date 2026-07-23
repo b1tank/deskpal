@@ -136,6 +136,44 @@ Or test directly via stdin:
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' | ./build/deskpal
 ```
 
+### Pi extension
+
+Deskpal ships a Pi extension that starts one persistent MCP process per Pi
+session and registers every server tool with a `deskpal_` prefix. Screenshot
+results are returned as Pi image blocks rather than base64 text.
+
+```bash
+# From this checkout
+pi -e ./extensions/deskpal.ts
+
+# Or install the checkout as a local Pi package
+pi install /absolute/path/to/deskpal
+```
+
+The extension resolves `build/deskpal` relative to the checkout. Override it
+when needed:
+
+```bash
+DESKPAL_BINARY=/absolute/path/to/deskpal pi -e ./extensions/deskpal.ts
+```
+
+Process-launch and filesystem tools remain disabled by default, matching the
+server's security model. Opt in explicitly when starting Pi:
+
+```bash
+DESKPAL_PI_ALLOW_EXEC=1 DESKPAL_PI_ALLOW_FS=1 pi -e ./extensions/deskpal.ts
+```
+
+Use `/deskpal-status` to verify the bridge. The extension closes the server and
+its isolated sessions when the Pi session shuts down.
+
+On GNOME 42, the optional logical-cursor extension adds
+`deskpal_agent_cursor_status`, `deskpal_agent_cursor_move`, and
+`deskpal_agent_cursor_hide`. Take a full-screen screenshot first, then pass its
+short-lived `captureId` and image-pixel coordinates to the move tool. The
+indicator is visual only: results explicitly report `inputDelivered: false`.
+Installation and acceptance steps are in [docs/gnome-indicator.md](docs/gnome-indicator.md).
+
 ### Goal-aware isolation
 
 Deskpal remains connected to the user's desktop and creates Xvfb sessions only

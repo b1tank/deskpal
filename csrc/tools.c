@@ -11,6 +11,8 @@
 #include "mcp.h"
 #include "x11.h"
 #include "screenshot.h"
+#include "captures.h"
+#include "indicator.h"
 #include "accessibility.h"
 #include "ocr.h"
 #include "sessions.h"
@@ -18,6 +20,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -437,7 +440,31 @@ cJSON *tool_screenshot(const cJSON *params)
 	                       (double)source_width / image_width);
 	cJSON_AddNumberToObject(metadata, "coordinateScaleY",
 	                       (double)source_height / image_height);
+	DeskpalCapture capture = {0};
+	if (full_screen) {
+		if (captures_store_desktop(source_width, source_height,
+		                           image_width, image_height, &capture) != 0) {
+			cJSON_Delete(metadata);
+			cJSON_Delete(result);
+			return mcp_tool_error_result("Could not assign screenshot capture ID");
+		}
+		cJSON_AddStringToObject(metadata, "captureId", capture.id);
+		cJSON_AddStringToObject(metadata, "captureTarget", "desktop");
+		cJSON_AddStringToObject(metadata, "captureCoordinateSpace", "image-pixels");
+	}
 	cJSON_AddItemToObject(result, "screenshot", metadata);
+
+	if (full_screen) {
+		char note[192];
+		snprintf(note, sizeof(note),
+			"Capture ID: %s. agent_cursor_move coordinates use pixels in this %dx%d image.",
+			capture.id, image_width, image_height);
+		cJSON *content = cJSON_GetObjectItem(result, "content");
+		cJSON *text_item = cJSON_CreateObject();
+		cJSON_AddStringToObject(text_item, "type", "text");
+		cJSON_AddStringToObject(text_item, "text", note);
+		cJSON_AddItemToArray(content, text_item);
+	}
 
 	if (image_width != source_width || image_height != source_height) {
 		char note[256];
@@ -453,6 +480,284 @@ cJSON *tool_screenshot(const cJSON *params)
 		cJSON_AddStringToObject(text_item, "text", note);
 		cJSON_AddItemToArray(content, text_item);
 	}
+	return result;
+}
+
+/* ── agent cursor indicator ──────────────────────────────────────────────── */
+
+#define INDICATOR_STATUS_LIMIT (64 * 1024)
+#define INDICATOR_SETTLE_TIMEOUT_MS 1200
+
+static cJSON *structured_text_result(cJSON *payload, const char *metadata_key)
+{
+	char *text = cJSON_PrintUnformatted(payload);
+	if (!text) {
+		cJSON_Delete(payload);
+		return mcp_tool_error_result("Could not serialize indicator result");
+	}
+	cJSON *result = mcp_text_result(text);
+	free(text);
+	cJSON_AddItemToObject(result, metadata_key, payload);
+	return result;
+}
+
+static cJSON *owned_indicator_status(char *error, size_t error_len)
+{
+	char *raw = NULL;
+	if (indicator_get_status(&raw, error, error_len) != 0) return NULL;
+	if (strlen(raw) > INDICATOR_STATUS_LIMIT) {
+		free(raw);
+		snprintf(error, error_len, "Indicator status exceeded the 64 KiB limit");
+		return NULL;
+	}
+	cJSON *status = cJSON_Parse(raw);
+	free(raw);
+	if (!status || !cJSON_IsObject(status)) {
+		cJSON_Delete(status);
+		snprintf(error, error_len, "Indicator returned invalid status JSON");
+		return NULL;
+	}
+
+	const cJSON *stage_width = cJSON_GetObjectItem(status, "stageWidth");
+	const cJSON *stage_height = cJSON_GetObjectItem(status, "stageHeight");
+	const cJSON *coordinate_space = cJSON_GetObjectItem(status, "coordinateSpace");
+	const cJSON *all_cursors = cJSON_GetObjectItem(status, "cursors");
+	if (!cJSON_IsNumber(stage_width) || !cJSON_IsNumber(stage_height) ||
+	    stage_width->valuedouble != stage_width->valueint ||
+	    stage_height->valuedouble != stage_height->valueint ||
+	    stage_width->valueint <= 0 || stage_width->valueint > 65536 ||
+	    stage_height->valueint <= 0 || stage_height->valueint > 65536 ||
+	    !cJSON_IsString(coordinate_space) ||
+	    strcmp(coordinate_space->valuestring, "gnome-stage-logical") != 0 ||
+	    !cJSON_IsArray(all_cursors)) {
+		cJSON_Delete(status);
+		snprintf(error, error_len, "Indicator status has an invalid geometry contract");
+		return NULL;
+	}
+
+	cJSON *owned_cursors = cJSON_CreateArray();
+	if (!owned_cursors) {
+		cJSON_Delete(status);
+		snprintf(error, error_len, "Out of memory filtering indicator status");
+		return NULL;
+	}
+	const cJSON *cursor = NULL;
+	cJSON_ArrayForEach(cursor, all_cursors) {
+		const cJSON *remote_id = cJSON_GetObjectItem(cursor, "cursorId");
+		if (!cJSON_IsString(remote_id)) continue;
+		char logical_id[DESKPAL_INDICATOR_CURSOR_ID_LEN];
+		if (indicator_logical_id_for_remote(remote_id->valuestring,
+		                                    logical_id, sizeof(logical_id)) != 0)
+			continue;
+		cJSON *copy = cJSON_Duplicate(cursor, 1);
+		if (!copy) continue;
+		cJSON_ReplaceItemInObject(copy, "cursorId", cJSON_CreateString(logical_id));
+		cJSON_AddItemToArray(owned_cursors, copy);
+	}
+	if (!cJSON_ReplaceItemInObject(status, "cursors", owned_cursors)) {
+		cJSON_Delete(owned_cursors);
+		cJSON_Delete(status);
+		snprintf(error, error_len, "Could not filter indicator cursor ownership");
+		return NULL;
+	}
+	cJSON_AddBoolToObject(status, "available", 1);
+	return status;
+}
+
+static int indicator_has_single_full_stage_monitor(const cJSON *status)
+{
+	const cJSON *monitors = cJSON_GetObjectItem(status, "monitors");
+	if (!cJSON_IsArray(monitors) || cJSON_GetArraySize(monitors) != 1) return 0;
+	const cJSON *monitor = cJSON_GetArrayItem(monitors, 0);
+	const cJSON *stage_width = cJSON_GetObjectItem(status, "stageWidth");
+	const cJSON *stage_height = cJSON_GetObjectItem(status, "stageHeight");
+	const cJSON *x = cJSON_GetObjectItem(monitor, "x");
+	const cJSON *y = cJSON_GetObjectItem(monitor, "y");
+	const cJSON *width = cJSON_GetObjectItem(monitor, "width");
+	const cJSON *height = cJSON_GetObjectItem(monitor, "height");
+	const cJSON *scale = cJSON_GetObjectItem(monitor, "scale");
+	return cJSON_IsNumber(x) && x->valueint == 0 &&
+	       cJSON_IsNumber(y) && y->valueint == 0 &&
+	       cJSON_IsNumber(width) && width->valueint == stage_width->valueint &&
+	       cJSON_IsNumber(height) && height->valueint == stage_height->valueint &&
+	       cJSON_IsNumber(scale) && scale->valuedouble > 0;
+}
+
+static const cJSON *owned_cursor_by_id(const cJSON *status, const char *cursor_id)
+{
+	const cJSON *cursors = cJSON_GetObjectItem(status, "cursors");
+	const cJSON *cursor = NULL;
+	cJSON_ArrayForEach(cursor, cursors) {
+		const cJSON *id = cJSON_GetObjectItem(cursor, "cursorId");
+		if (cJSON_IsString(id) && strcmp(id->valuestring, cursor_id) == 0)
+			return cursor;
+	}
+	return NULL;
+}
+
+static cJSON *indicator_side_effect_payload(const char *cursor_id)
+{
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "cursorId", cursor_id);
+	cJSON_AddBoolToObject(payload, "inputDelivered", 0);
+	cJSON_AddBoolToObject(payload, "sharedPointerMoved", 0);
+	cJSON_AddBoolToObject(payload, "focusChanged", 0);
+	cJSON_AddBoolToObject(payload, "stackingChanged", 0);
+	cJSON_AddBoolToObject(payload, "clipboardChanged", 0);
+	return payload;
+}
+
+cJSON *tool_agent_cursor_status(const cJSON *params)
+{
+	(void)params;
+	char error[256] = {0};
+	cJSON *status = owned_indicator_status(error, sizeof(error));
+	if (status) return structured_text_result(status, "indicator");
+
+	cJSON *unavailable = cJSON_CreateObject();
+	cJSON_AddBoolToObject(unavailable, "available", 0);
+	cJSON_AddStringToObject(unavailable, "blocker", error);
+	return structured_text_result(unavailable, "indicator");
+}
+
+cJSON *tool_agent_cursor_move(const cJSON *params)
+{
+	const char *capture_id = json_str(params, "captureId", NULL);
+	const char *cursor_id = json_str(params, "cursorId", "primary");
+	const char *color = json_str(params, "color", "#36C5F0");
+	const char *label = json_str(params, "label", cursor_id);
+	const cJSON *x_item = cJSON_GetObjectItem(params, "x");
+	const cJSON *y_item = cJSON_GetObjectItem(params, "y");
+	if (!capture_id || !capture_id[0] || strlen(capture_id) >= DESKPAL_CAPTURE_ID_LEN)
+		return mcp_tool_error_result("captureId must identify a recent full-screen capture");
+	if (!cJSON_IsNumber(x_item) || !cJSON_IsNumber(y_item) ||
+	    x_item->valuedouble != x_item->valueint ||
+	    y_item->valuedouble != y_item->valueint)
+		return mcp_tool_error_result("x and y must be integral image pixels");
+
+	DeskpalCapture capture;
+	int lookup = captures_lookup(capture_id, &capture);
+	if (lookup == -2)
+		return mcp_tool_error_result("captureId is stale; take a fresh full-screen screenshot");
+	if (lookup != 0)
+		return mcp_tool_error_result("captureId is unknown or no longer retained");
+	int image_x = x_item->valueint;
+	int image_y = y_item->valueint;
+	if (image_x < 0 || image_x >= capture.image_width ||
+	    image_y < 0 || image_y >= capture.image_height)
+		return mcp_tool_error_result("x/y fall outside the capture image bounds");
+
+	char error[256] = {0};
+	cJSON *before = owned_indicator_status(error, sizeof(error));
+	if (!before) return mcp_tool_error_result(error);
+	if (!indicator_has_single_full_stage_monitor(before)) {
+		cJSON_Delete(before);
+		return mcp_tool_error_result(
+			"agent_cursor_move currently supports exactly one full-stage monitor; mixed-scale and multi-monitor layouts fail closed");
+	}
+	int stage_width = cJSON_GetObjectItem(before, "stageWidth")->valueint;
+	int stage_height = cJSON_GetObjectItem(before, "stageHeight")->valueint;
+	double source_scale_x = (double)stage_width / capture.source_width;
+	double source_scale_y = (double)stage_height / capture.source_height;
+	double scale_max = fmax(source_scale_x, source_scale_y);
+	if (scale_max <= 0 || fabs(source_scale_x - source_scale_y) > scale_max * 0.01) {
+		cJSON_Delete(before);
+		return mcp_tool_error_result(
+			"Capture and GNOME stage geometry no longer share one coordinate transform");
+	}
+	cJSON_Delete(before);
+
+	int stage_x = (int)lround((double)image_x * stage_width / capture.image_width);
+	int stage_y = (int)lround((double)image_y * stage_height / capture.image_height);
+	if (stage_x >= stage_width) stage_x = stage_width - 1;
+	if (stage_y >= stage_height) stage_y = stage_height - 1;
+
+	int created = 0;
+	int mutation_issued = 0;
+	int outcome_unknown = 0;
+	if (indicator_move_owned(cursor_id, stage_x, stage_y, color, label,
+	                         &created, &mutation_issued, &outcome_unknown,
+	                         error, sizeof(error)) != 0) {
+		cJSON *payload = indicator_side_effect_payload(cursor_id);
+		cJSON_AddStringToObject(payload, "captureId", capture_id);
+		cJSON_AddBoolToObject(payload, "mutationIssued", mutation_issued);
+		cJSON_AddBoolToObject(payload, "actionOutcomeUnknown", outcome_unknown);
+		cJSON_AddBoolToObject(payload, "indicatorMoved", 0);
+		cJSON_AddBoolToObject(payload, "verified", 0);
+		cJSON_AddStringToObject(payload, "error", error);
+		cJSON *result = structured_text_result(payload, "indicator");
+		cJSON_AddBoolToObject(result, "isError", 1);
+		return result;
+	}
+
+	cJSON *settled_status = NULL;
+	const cJSON *settled_cursor = NULL;
+	for (int elapsed = 0; elapsed <= INDICATOR_SETTLE_TIMEOUT_MS; elapsed += 20) {
+		settled_status = owned_indicator_status(error, sizeof(error));
+		if (!settled_status) break;
+		settled_cursor = owned_cursor_by_id(settled_status, cursor_id);
+		const cJSON *state = settled_cursor
+			? cJSON_GetObjectItem(settled_cursor, "state") : NULL;
+		const cJSON *target_x = settled_cursor
+			? cJSON_GetObjectItem(settled_cursor, "x") : NULL;
+		const cJSON *target_y = settled_cursor
+			? cJSON_GetObjectItem(settled_cursor, "y") : NULL;
+		if (cJSON_IsString(state) && strcmp(state->valuestring, "idle") == 0 &&
+		    cJSON_IsNumber(target_x) && target_x->valueint == stage_x &&
+		    cJSON_IsNumber(target_y) && target_y->valueint == stage_y)
+			break;
+		settled_cursor = NULL;
+		cJSON_Delete(settled_status);
+		settled_status = NULL;
+		usleep_ms(20);
+	}
+
+	cJSON *payload = indicator_side_effect_payload(cursor_id);
+	cJSON_AddStringToObject(payload, "captureId", capture_id);
+	cJSON *image_position = cJSON_CreateObject();
+	cJSON_AddNumberToObject(image_position, "x", image_x);
+	cJSON_AddNumberToObject(image_position, "y", image_y);
+	cJSON_AddItemToObject(payload, "imagePosition", image_position);
+	cJSON *stage_position = cJSON_CreateObject();
+	cJSON_AddNumberToObject(stage_position, "x", stage_x);
+	cJSON_AddNumberToObject(stage_position, "y", stage_y);
+	cJSON_AddItemToObject(payload, "stagePosition", stage_position);
+	int verified = settled_cursor != NULL;
+	cJSON_AddBoolToObject(payload, "created", created);
+	cJSON_AddBoolToObject(payload, "mutationIssued", 1);
+	cJSON_AddBoolToObject(payload, "actionOutcomeUnknown", !verified);
+	cJSON_AddBoolToObject(payload, "indicatorMoved", verified);
+	cJSON_AddBoolToObject(payload, "verified", verified);
+	if (verified)
+		cJSON_AddItemToObject(payload, "cursor", cJSON_Duplicate(settled_cursor, 1));
+	else
+		cJSON_AddStringToObject(payload, "error",
+			error[0] ? error : "Indicator movement did not settle before timeout");
+	cJSON_Delete(settled_status);
+
+	cJSON *result = structured_text_result(payload, "indicator");
+	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
+	return result;
+}
+
+cJSON *tool_agent_cursor_hide(const cJSON *params)
+{
+	const char *cursor_id = json_str(params, "cursorId", "primary");
+	int hidden = 0;
+	int mutation_issued = 0;
+	int outcome_unknown = 0;
+	char error[256] = {0};
+	int rc = indicator_hide_owned(cursor_id, &hidden, &mutation_issued,
+	                              &outcome_unknown,
+	                              error, sizeof(error));
+	cJSON *payload = indicator_side_effect_payload(cursor_id);
+	cJSON_AddBoolToObject(payload, "mutationIssued", mutation_issued);
+	cJSON_AddBoolToObject(payload, "actionOutcomeUnknown", outcome_unknown);
+	cJSON_AddBoolToObject(payload, "hidden", rc == 0 && hidden);
+	cJSON_AddBoolToObject(payload, "verified", rc == 0 && !outcome_unknown);
+	if (rc != 0) cJSON_AddStringToObject(payload, "error", error);
+	cJSON *result = structured_text_result(payload, "indicator");
+	if (rc != 0) cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
 
@@ -2381,6 +2686,40 @@ void tools_register_all(void)
 		"  }"
 		"}",
 		tool_screenshot);
+
+	mcp_register_tool("agent_cursor_status",
+		"Report GNOME logical-cursor availability, stage and monitor geometry, and only the cursors owned by this Deskpal process. Indicator state is visual metadata, not proof of delivered input.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {}"
+		"}",
+		tool_agent_cursor_status);
+
+	mcp_register_tool("agent_cursor_move",
+		"Create or move this Deskpal process's logical agent cursor to a point in a recent full-screen capture. Coordinates are pixels in the returned image, not source pixels. This moves only the visual indicator and never delivers application input.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"x\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 32768, \"description\": \"X in capture image pixels\"},"
+		"    \"y\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 32768, \"description\": \"Y in capture image pixels\"},"
+		"    \"cursorId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 40, \"default\": \"primary\"},"
+		"    \"color\": {\"type\": \"string\", \"pattern\": \"^#[0-9A-Fa-f]{6}$\", \"default\": \"#36C5F0\"},"
+		"    \"label\": {\"type\": \"string\", \"maxLength\": 48}"
+		"  },"
+		"  \"required\": [\"captureId\", \"x\", \"y\"]"
+		"}",
+		tool_agent_cursor_move);
+
+	mcp_register_tool("agent_cursor_hide",
+		"Hide one logical cursor owned by this Deskpal process. It cannot hide another process's cursor and does not use the global ClearAll operation.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"cursorId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 40, \"default\": \"primary\"}"
+		"  }"
+		"}",
+		tool_agent_cursor_hide);
 
 	mcp_register_tool("list_windows",
 		"List top-level application windows on the user's desktop by default, or in an isolated verification session when sessionId is supplied. Set includeAll for recursive helper/dialog discovery.",

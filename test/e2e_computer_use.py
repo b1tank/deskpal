@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic isolated E2E coverage for deskpal's computer-use surface."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -85,10 +86,25 @@ def run_suite():
             screenshot_schema = tool_by_name(tools, "screenshot")["inputSchema"]
             list_schema = tool_by_name(tools, "list_windows")["inputSchema"]
             launch_schema = tool_by_name(tools, "launch_app")["inputSchema"]
+            cursor_move_schema = tool_by_name(tools, "agent_cursor_move")["inputSchema"]
+            tool_by_name(tools, "agent_cursor_status")
+            tool_by_name(tools, "agent_cursor_hide")
             assert "maxWidth" in screenshot_schema["properties"]
             assert "maxHeight" in screenshot_schema["properties"]
             assert "includeAll" in list_schema["properties"]
             assert "forceX11" in launch_schema["properties"]
+            assert cursor_move_schema["required"] == ["captureId", "x", "y"]
+            assert cursor_move_schema["properties"]["x"]["type"] == "integer"
+
+            indicator_status = json.loads(text(client.tool("agent_cursor_status")))
+            assert indicator_status["available"] is False, indicator_status
+            assert indicator_status["blocker"], indicator_status
+            hidden = json.loads(text(client.tool("agent_cursor_hide")))
+            assert hidden["hidden"] is False and hidden["verified"] is True, hidden
+            unknown_capture = client.tool(
+                "agent_cursor_move", {"captureId": "capture-unknown", "x": 1, "y": 1}
+            )
+            assert unknown_capture.get("isError") is True, unknown_capture
 
             backend_launch = client.tool(
                 "launch_app",
@@ -158,6 +174,31 @@ def run_suite():
                 "coordinateScaleX": 1,
                 "coordinateScaleY": 1,
             }, original["screenshot"]
+
+            desktop_capture = client.tool(
+                "screenshot", {"fullScreen": True, "maxWidth": 640}
+            )
+            assert png_size(desktop_capture) == (640, 400), png_size(desktop_capture)
+            capture_metadata = desktop_capture["screenshot"]
+            assert capture_metadata["sourceWidth"] == 1280, capture_metadata
+            assert capture_metadata["sourceHeight"] == 800, capture_metadata
+            assert capture_metadata["coordinateScaleX"] == 2, capture_metadata
+            assert capture_metadata["coordinateScaleY"] == 2, capture_metadata
+            assert capture_metadata["captureId"].startswith("capture-"), capture_metadata
+            assert capture_metadata["captureTarget"] == "desktop", capture_metadata
+            assert capture_metadata["captureCoordinateSpace"] == "image-pixels", capture_metadata
+            assert capture_metadata["captureId"] in text(desktop_capture, 1), desktop_capture
+            unavailable_move = client.tool(
+                "agent_cursor_move",
+                {"captureId": capture_metadata["captureId"], "x": 320, "y": 200},
+            )
+            assert unavailable_move.get("isError") is True, unavailable_move
+            assert "indicator" in text(unavailable_move).lower(), unavailable_move
+            next_capture = client.tool("screenshot", {"fullScreen": True})
+            assert (
+                next_capture["screenshot"]["captureId"]
+                != capture_metadata["captureId"]
+            ), next_capture["screenshot"]
 
             scaled = client.tool(
                 "screenshot",

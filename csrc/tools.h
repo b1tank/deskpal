@@ -15,6 +15,9 @@ void tools_register_all(void);
 /* ── Individual tool handlers ─────────────────────────────────────────────── */
 
 cJSON *tool_screenshot(const cJSON *params);
+cJSON *tool_agent_cursor_status(const cJSON *params);
+cJSON *tool_agent_cursor_move(const cJSON *params);
+cJSON *tool_agent_cursor_hide(const cJSON *params);
 cJSON *tool_list_windows(const cJSON *params);
 cJSON *tool_find_window(const cJSON *params);
 cJSON *tool_focus_window(const cJSON *params);

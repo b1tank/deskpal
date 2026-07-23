@@ -1,0 +1,18 @@
+.deskpal-agent-cursor {
+  spacing: 8px;
+}
+
+.deskpal-agent-cursor-pointer {
+  height: 33px;
+  width: 25px;
+}
+
+.deskpal-agent-cursor-label {
+  background-color: rgba(18, 18, 18, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 6px;
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 3px 7px;
+}

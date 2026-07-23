@@ -10,6 +10,8 @@
 #include "sessions.h"
 #include "tools.h"
 #include "control.h"
+#include "captures.h"
+#include "indicator.h"
 #include "accessibility.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -199,6 +201,8 @@ int main(int argc, char **argv)
 	int rc = mcp_run();
 
 	sessions_cleanup_all();
+	indicator_cleanup();
+	captures_cleanup();
 	control_cleanup();
 	accessibility_cleanup();
 	ocr_cleanup();

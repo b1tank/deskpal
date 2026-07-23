@@ -12,6 +12,8 @@ npm test
 `npm test` runs entirely in nested/private X displays and must not manipulate
 the user's visible desktop:
 
+- `indicator_contract.py`: static GNOME extension syntax, narrow D-Bus surface,
+  caller ownership hooks, click-through behavior, and absence of input APIs.
 - `e2e_isolation.py`: parent/child routing, Xvfb lifecycle, cleanup, malformed
   session IDs, missing-window safety, OCR, screenshots, and binary replacement.
 - `e2e_computer_use.py`: deterministic Tk workflow for app identity, screenshot
@@ -65,12 +67,17 @@ Close important work first.
 ```bash
 npm run test:desktop
 npm run test:sysmon
-# or both
+npm run test:indicator-live
+# or all live suites
 npm run test:live
 ```
 
 They require a real X11/Xwayland display, `/dev/uinput` access for full input
-coverage, and the named applications. Screenshot artifacts go under `/tmp`.
+coverage, and the named applications. `test:indicator-live` additionally
+requires the installed GNOME extension and verifies full/downscaled capture
+mapping, edge placement, restyling, cross-process isolation, graceful and
+forced-death cleanup, and pointer/focus/stacking/clipboard non-interference.
+Screenshot artifacts go under `/tmp`.
 Capability-dependent cases print `BLOCK` when the visible surface is native
 Wayland and therefore outside the current backend; blocked is not counted as
 passed.

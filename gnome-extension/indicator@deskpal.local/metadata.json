@@ -1,0 +1,8 @@
+{
+  "uuid": "indicator@deskpal.local",
+  "name": "Deskpal Agent Indicator",
+  "description": "Shows non-interactive logical cursors and target indicators for Deskpal agents.",
+  "shell-version": ["42"],
+  "version": 1,
+  "url": "https://github.com/b1tank/deskpal"
+}

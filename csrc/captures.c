@@ -1,0 +1,88 @@
+/*
+ * deskpal — Bounded screenshot capture identities
+ *
+ * Copyright (c) 2026 deskpal contributors
+ * SPDX-License-Identifier: MIT
+ */
+#include "captures.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <sys/random.h>
+#include <time.h>
+#include <unistd.h>
+
+#define CAPTURE_HISTORY_SIZE 16
+#define CAPTURE_MAX_AGE_MS 120000
+
+static DeskpalCapture history[CAPTURE_HISTORY_SIZE];
+static unsigned int history_next;
+static uint64_t session_nonce;
+static uint64_t sequence;
+
+static int64_t monotonic_ms(void)
+{
+	struct timespec now;
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+	return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static void ensure_nonce(void)
+{
+	if (session_nonce != 0) return;
+	if (getrandom(&session_nonce, sizeof(session_nonce), GRND_NONBLOCK) !=
+	    (ssize_t)sizeof(session_nonce) || session_nonce == 0) {
+		session_nonce = ((uint64_t)(unsigned int)getpid() << 32) ^
+		                (uint64_t)monotonic_ms();
+		if (session_nonce == 0) session_nonce = 1;
+	}
+}
+
+int captures_store_desktop(int source_width, int source_height,
+                           int image_width, int image_height,
+                           DeskpalCapture *capture)
+{
+	if (!capture || source_width <= 0 || source_height <= 0 ||
+	    image_width <= 0 || image_height <= 0)
+		return -1;
+
+	ensure_nonce();
+	DeskpalCapture next = {0};
+	int written = snprintf(next.id, sizeof(next.id), "capture-%016llx-%llu",
+	                       (unsigned long long)session_nonce,
+	                       (unsigned long long)++sequence);
+	if (written < 0 || (size_t)written >= sizeof(next.id)) return -1;
+	next.source_width = source_width;
+	next.source_height = source_height;
+	next.image_width = image_width;
+	next.image_height = image_height;
+	next.created_monotonic_ms = monotonic_ms();
+
+	history[history_next] = next;
+	history_next = (history_next + 1) % CAPTURE_HISTORY_SIZE;
+	*capture = next;
+	return 0;
+}
+
+int captures_lookup(const char *id, DeskpalCapture *capture)
+{
+	if (!id || !id[0] || !capture) return -1;
+	for (unsigned int i = 0; i < CAPTURE_HISTORY_SIZE; i++) {
+		if (history[i].id[0] && strcmp(history[i].id, id) == 0) {
+			*capture = history[i];
+			if (monotonic_ms() - history[i].created_monotonic_ms >
+			    CAPTURE_MAX_AGE_MS)
+				return -2;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+void captures_cleanup(void)
+{
+	memset(history, 0, sizeof(history));
+	history_next = 0;
+	session_nonce = 0;
+	sequence = 0;
+}
