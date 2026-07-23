@@ -340,6 +340,72 @@ static int resize_png(uint8_t **png, size_t *png_len,
 	return 0;
 }
 
+typedef struct {
+	uint8_t *png;
+	size_t png_len;
+	int source_width;
+	int source_height;
+	int image_width;
+	int image_height;
+} CapturedImage;
+
+static int capture_target_image(unsigned long target, int full_screen,
+                                int max_width, int max_height,
+                                CapturedImage *image,
+                                char *error, size_t error_len)
+{
+	memset(image, 0, sizeof(*image));
+	image->png = screenshot_capture_png(target, &image->png_len);
+
+	if (!image->png && target != 0) {
+		char path[64];
+		snprintf(path, sizeof(path), "/tmp/deskpal_ss_%d.png", getpid());
+		char command[256];
+		snprintf(command, sizeof(command),
+			"import -window 0x%lx png:\"%s\" 2>/dev/null", target, path);
+		unlink(path);
+		if (system(command) == 0)
+			(void)read_binary_file(path, &image->png, &image->png_len);
+		unlink(path);
+	}
+
+	if (!image->png && full_screen && !getenv("DESKPAL_HEADLESS_ACTIVE")) {
+		char path[64];
+		snprintf(path, sizeof(path), "/tmp/deskpal_ss_%d.png", getpid());
+		char command[256];
+		snprintf(command, sizeof(command),
+			"gnome-screenshot -f \"%s\" 2>/dev/null"
+			" || grim \"%s\" 2>/dev/null", path, path);
+		unlink(path);
+		if (system(command) == 0)
+			(void)read_binary_file(path, &image->png, &image->png_len);
+		unlink(path);
+	}
+
+	if (!image->png) {
+		snprintf(error, error_len, "Screenshot failed: could not capture window");
+		return -1;
+	}
+	if (png_dimensions(image->png, image->png_len,
+	                   &image->source_width, &image->source_height) != 0) {
+		free(image->png);
+		image->png = NULL;
+		snprintf(error, error_len, "Screenshot failed: invalid PNG dimensions");
+		return -1;
+	}
+	if (resize_png(&image->png, &image->png_len,
+	               image->source_width, image->source_height,
+	               max_width, max_height,
+	               &image->image_width, &image->image_height) != 0) {
+		free(image->png);
+		image->png = NULL;
+		snprintf(error, error_len,
+		         "Screenshot downscaling failed. Ensure ImageMagick 'convert' is installed");
+		return -1;
+	}
+	return 0;
+}
+
 /* ── screenshot ──────────────────────────────────────────────────────────── */
 
 cJSON *tool_screenshot(const cJSON *params)
@@ -358,71 +424,14 @@ cJSON *tool_screenshot(const cJSON *params)
 		target = wid ? wid : x11_get_active_window();
 	}
 
-	size_t png_len = 0;
-	uint8_t *png = screenshot_capture_png(target, &png_len);
+	CapturedImage image;
+	char capture_error[256];
+	if (capture_target_image(target, full_screen, max_width, max_height,
+	                         &image, capture_error, sizeof(capture_error)) != 0)
+		return mcp_text_result(capture_error);
 
-	if (!png && target != 0) {
-		/* XCB GetImage fails for some windows (e.g. transient dialogs on
-		 * Xwayland) — fall back to ImageMagick import */
-		char tmp[64];
-		snprintf(tmp, sizeof(tmp), "/tmp/deskpal_ss_%d.png", getpid());
-		char cmd[256];
-		snprintf(cmd, sizeof(cmd),
-			"import -window 0x%lx png:\"%s\" 2>/dev/null",
-			target, tmp);
-		system(cmd);
-		FILE *f = fopen(tmp, "rb");
-		if (f) {
-			fseek(f, 0, SEEK_END);
-			png_len = ftell(f);
-			fseek(f, 0, SEEK_SET);
-			png = malloc(png_len);
-			if (png) fread(png, 1, png_len, f);
-			fclose(f);
-			unlink(tmp);
-		}
-	}
-
-	if (!png && full_screen && !getenv("DESKPAL_HEADLESS_ACTIVE")) {
-		/* XCB root capture fails on Xwayland — use gnome-screenshot/grim */
-		char tmp[64];
-		snprintf(tmp, sizeof(tmp), "/tmp/deskpal_ss_%d.png", getpid());
-		char cmd[256];
-		snprintf(cmd, sizeof(cmd),
-			"gnome-screenshot -f \"%s\" 2>/dev/null"
-			" || grim \"%s\" 2>/dev/null", tmp, tmp);
-		system(cmd);
-		FILE *f = fopen(tmp, "rb");
-		if (f) {
-			fseek(f, 0, SEEK_END);
-			png_len = ftell(f);
-			fseek(f, 0, SEEK_SET);
-			png = malloc(png_len);
-			if (png) fread(png, 1, png_len, f);
-			fclose(f);
-			unlink(tmp);
-		}
-	}
-
-	if (!png) {
-		return mcp_text_result("Screenshot failed: could not capture window");
-	}
-
-	int source_width = 0, source_height = 0;
-	int image_width = 0, image_height = 0;
-	if (png_dimensions(png, png_len, &source_width, &source_height) != 0) {
-		free(png);
-		return mcp_text_result("Screenshot failed: invalid PNG dimensions");
-	}
-	if (resize_png(&png, &png_len, source_width, source_height,
-	               max_width, max_height, &image_width, &image_height) != 0) {
-		free(png);
-		return mcp_text_result(
-			"Screenshot downscaling failed. Ensure ImageMagick 'convert' is installed");
-	}
-
-	char *b64 = screenshot_base64_encode(png, png_len);
-	free(png);
+	char *b64 = screenshot_base64_encode(image.png, image.png_len);
+	free(image.png);
 
 	if (!b64) {
 		return mcp_text_result("Screenshot failed: base64 encoding error");
@@ -432,18 +441,18 @@ cJSON *tool_screenshot(const cJSON *params)
 	free(b64);
 
 	cJSON *metadata = cJSON_CreateObject();
-	cJSON_AddNumberToObject(metadata, "sourceWidth", source_width);
-	cJSON_AddNumberToObject(metadata, "sourceHeight", source_height);
-	cJSON_AddNumberToObject(metadata, "imageWidth", image_width);
-	cJSON_AddNumberToObject(metadata, "imageHeight", image_height);
+	cJSON_AddNumberToObject(metadata, "sourceWidth", image.source_width);
+	cJSON_AddNumberToObject(metadata, "sourceHeight", image.source_height);
+	cJSON_AddNumberToObject(metadata, "imageWidth", image.image_width);
+	cJSON_AddNumberToObject(metadata, "imageHeight", image.image_height);
 	cJSON_AddNumberToObject(metadata, "coordinateScaleX",
-	                       (double)source_width / image_width);
+	                       (double)image.source_width / image.image_width);
 	cJSON_AddNumberToObject(metadata, "coordinateScaleY",
-	                       (double)source_height / image_height);
+	                       (double)image.source_height / image.image_height);
 	DeskpalCapture capture = {0};
 	if (full_screen) {
-		if (captures_store_desktop(source_width, source_height,
-		                           image_width, image_height, &capture) != 0) {
+		if (captures_store_desktop(image.source_width, image.source_height,
+		                           image.image_width, image.image_height, &capture) != 0) {
 			cJSON_Delete(metadata);
 			cJSON_Delete(result);
 			return mcp_tool_error_result("Could not assign screenshot capture ID");
@@ -458,7 +467,7 @@ cJSON *tool_screenshot(const cJSON *params)
 		char note[192];
 		snprintf(note, sizeof(note),
 			"Capture ID: %s. agent_cursor_move coordinates use pixels in this %dx%d image.",
-			capture.id, image_width, image_height);
+			capture.id, image.image_width, image.image_height);
 		cJSON *content = cJSON_GetObjectItem(result, "content");
 		cJSON *text_item = cJSON_CreateObject();
 		cJSON_AddStringToObject(text_item, "type", "text");
@@ -466,14 +475,16 @@ cJSON *tool_screenshot(const cJSON *params)
 		cJSON_AddItemToArray(content, text_item);
 	}
 
-	if (image_width != source_width || image_height != source_height) {
+	if (image.image_width != image.source_width ||
+	    image.image_height != image.source_height) {
 		char note[256];
 		snprintf(note, sizeof(note),
 			"Screenshot downscaled from %dx%d to %dx%d. Input-tool coordinates "
 			"use source pixels; multiply image x by %.4f and y by %.4f.",
-			source_width, source_height, image_width, image_height,
-			(double)source_width / image_width,
-			(double)source_height / image_height);
+			image.source_width, image.source_height,
+			image.image_width, image.image_height,
+			(double)image.source_width / image.image_width,
+			(double)image.source_height / image.image_height);
 		cJSON *content = cJSON_GetObjectItem(result, "content");
 		cJSON *text_item = cJSON_CreateObject();
 		cJSON_AddStringToObject(text_item, "type", "text");
