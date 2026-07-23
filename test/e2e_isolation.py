@@ -134,9 +134,10 @@ def main():
         with open(runtime_probe, "w", encoding="ascii") as script:
             script.write(
                 "#!/bin/sh\n"
-                'printf "%s|%s|%s|%s|%s\\n" "${XDG_RUNTIME_DIR-unset}" '
+                'printf "%s|%s|%s|%s|%s|%s\\n" "${XDG_RUNTIME_DIR-unset}" '
                 '"${WAYLAND_DISPLAY-unset}" "${AT_SPI_BUS_ADDRESS-unset}" '
                 '"${AT_SPI_BUS-unset}" "${AT_SPI_DISPLAY-unset}" '
+                '"${ELECTRON_OZONE_PLATFORM_HINT-unset}" '
                 '> "$DESKPAL_RUNTIME_PROBE"\n'
                 "exec xmessage \"$@\"\n"
             )
@@ -240,6 +241,7 @@ def main():
                         "AT_SPI_BUS_ADDRESS": "unix:path=/override/at-spi-bus",
                         "AT_SPI_BUS": "override-at-spi-bus",
                         "AT_SPI_DISPLAY": "override-at-spi-display",
+                        "ELECTRON_OZONE_PLATFORM_HINT": "wayland-do-not-use",
                         "DESKPAL_LITERAL_ENV": f"value; touch {launch_sentinel}",
                     },
                 },
@@ -254,7 +256,7 @@ def main():
                 "isolated child used PATH-shadowed xvfb-run"
             )
             with open(runtime_probe_output, encoding="ascii") as probe_file:
-                assert probe_file.read().strip() == "unset|unset|unset|unset|unset"
+                assert probe_file.read().strip() == "unset|unset|unset|unset|unset|unset"
             new_children = direct_children(client.proc.pid) - children_before
             assert len(new_children) == 1, new_children
             session_process_group = new_children.pop()

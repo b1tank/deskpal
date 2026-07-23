@@ -48,6 +48,18 @@ def run_suite():
         xvfb, env = start_xvfb(temp_dir)
         fake_bin = os.path.join(temp_dir, "fake-bin")
         os.mkdir(fake_bin)
+        backend_probe_output = os.path.join(temp_dir, "backend-probe-output")
+        backend_probe = os.path.join(temp_dir, "backend-probe")
+        with open(backend_probe, "w", encoding="ascii") as script:
+            script.write(
+                "#!/bin/sh\n"
+                'printf "%s|%s|%s|%s|%s\\n" "${WAYLAND_DISPLAY-unset}" '
+                '"${XDG_SESSION_TYPE-unset}" "${GDK_BACKEND-unset}" '
+                '"${QT_QPA_PLATFORM-unset}" "${ELECTRON_OZONE_PLATFORM_HINT-unset}" '
+                '> "$DESKPAL_BACKEND_PROBE"\n'
+                'exec xmessage -title "deskpal-x11-backend" probe\n'
+            )
+        os.chmod(backend_probe, 0o755)
         hanging_convert = os.path.join(fake_bin, "convert")
         with open(hanging_convert, "w", encoding="ascii") as script:
             script.write("#!/bin/sh\nexec sleep 30\n")
@@ -72,9 +84,32 @@ def run_suite():
             tools = client.tools()
             screenshot_schema = tool_by_name(tools, "screenshot")["inputSchema"]
             list_schema = tool_by_name(tools, "list_windows")["inputSchema"]
+            launch_schema = tool_by_name(tools, "launch_app")["inputSchema"]
             assert "maxWidth" in screenshot_schema["properties"]
             assert "maxHeight" in screenshot_schema["properties"]
             assert "includeAll" in list_schema["properties"]
+            assert "forceX11" in launch_schema["properties"]
+
+            backend_launch = client.tool(
+                "launch_app",
+                {
+                    "command": backend_probe,
+                    "waitForWindow": "deskpal-x11-backend",
+                    "killExisting": False,
+                    "timeout": 3,
+                    "env": {
+                        "DESKPAL_BACKEND_PROBE": backend_probe_output,
+                        "WAYLAND_DISPLAY": "wayland-test",
+                        "XDG_SESSION_TYPE": "wayland",
+                        "GDK_BACKEND": "wayland",
+                        "QT_QPA_PLATFORM": "wayland",
+                        "ELECTRON_OZONE_PLATFORM_HINT": "wayland",
+                    },
+                },
+            )
+            assert "deskpal-x11-backend" in text(backend_launch), backend_launch
+            with open(backend_probe_output, encoding="ascii") as probe_file:
+                assert probe_file.read().strip() == "unset|x11|x11|xcb|x11"
 
             launched = client.tool(
                 "launch_app",

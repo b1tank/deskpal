@@ -1336,6 +1336,7 @@ static int is_headless_session_env(const char *name)
 		"XDG_SESSION_TYPE",
 		"GDK_BACKEND",
 		"QT_QPA_PLATFORM",
+		"ELECTRON_OZONE_PLATFORM_HINT",
 		NULL
 	};
 
@@ -1373,7 +1374,7 @@ static void report_launch_error(int fd, int error_number)
 }
 
 static int launch_detached(const char *command, const cJSON *args,
-	                       const cJSON *env, int headless,
+	                       const cJSON *env, int headless, int force_x11,
 	                       char *error, size_t error_len)
 {
 	int status_pipe[2];
@@ -1421,6 +1422,20 @@ static int launch_detached(const char *command, const cJSON *args,
 						report_launch_error(status_pipe[1], errno);
 				}
 			}
+		}
+
+		/* Window discovery and input are X11-backed. A visible launch that
+		 * waits for a window must therefore prefer XWayland; otherwise a
+		 * toolkit may create a native Wayland surface that Deskpal cannot
+		 * discover or control. Apply this after caller env so the contract is
+		 * deterministic. Native Wayland remains available with forceX11=false. */
+		if (!headless && force_x11) {
+			unsetenv("WAYLAND_DISPLAY");
+			if (setenv("XDG_SESSION_TYPE", "x11", 1) != 0 ||
+			    setenv("GDK_BACKEND", "x11", 1) != 0 ||
+			    setenv("QT_QPA_PLATFORM", "xcb", 1) != 0 ||
+			    setenv("ELECTRON_OZONE_PLATFORM_HINT", "x11", 1) != 0)
+				report_launch_error(status_pipe[1], errno);
 		}
 
 		int null_fd = open("/dev/null", O_RDWR);
@@ -1486,6 +1501,7 @@ cJSON *tool_launch_app(const cJSON *params)
 		return mcp_tool_error_result(
 			"waitForWindow must be a non-empty string when provided");
 	const char *wait_title = wait_item ? wait_item->valuestring : NULL;
+	int force_x11 = json_bool(params, "forceX11", wait_title != NULL);
 
 	/* Extract basename */
 	const char *basename = strrchr(command, '/');
@@ -1499,7 +1515,7 @@ cJSON *tool_launch_app(const cJSON *params)
 	const cJSON *env = cJSON_GetObjectItem(params, "env");
 	const cJSON *args = cJSON_GetObjectItem(params, "args");
 	char launch_error[256];
-	if (launch_detached(command, args, env, headless,
+	if (launch_detached(command, args, env, headless, force_x11,
 	                    launch_error, sizeof(launch_error)) != 0)
 		return mcp_tool_error_result(launch_error);
 
@@ -1852,7 +1868,7 @@ static int build_clipboard_cmd(char *cmd_buf, size_t cmd_len, char mode,
 				is_primary ? " --primary" : "");
 		} else {
 			snprintf(cmd_buf, cmd_len,
-				"wl-copy%s",
+				"wl-copy%s >/dev/null 2>&1",
 				is_primary ? " --primary" : "");
 		}
 		return 0;
@@ -1864,7 +1880,7 @@ static int build_clipboard_cmd(char *cmd_buf, size_t cmd_len, char mode,
 				"xclip -selection %s -o 2>/dev/null", sel);
 		} else {
 			snprintf(cmd_buf, cmd_len,
-				"xclip -selection %s -i", sel);
+				"xclip -selection %s -i >/dev/null 2>&1", sel);
 		}
 		return 0;
 	}
@@ -1873,7 +1889,8 @@ static int build_clipboard_cmd(char *cmd_buf, size_t cmd_len, char mode,
 		if (mode == 'r') {
 			snprintf(cmd_buf, cmd_len, "xsel %s -o 2>/dev/null", flag);
 		} else {
-			snprintf(cmd_buf, cmd_len, "xsel %s -i", flag);
+			snprintf(cmd_buf, cmd_len,
+				"xsel %s -i >/dev/null 2>&1", flag);
 		}
 		return 0;
 	}
@@ -2533,6 +2550,7 @@ void tools_register_all(void)
 		"    \"waitForWindow\": {\"type\": \"string\"},"
 		"    \"timeout\": {\"type\": \"number\", \"default\": 10},"
 		"    \"killExisting\": {\"type\": \"boolean\", \"default\": true},"
+		"    \"forceX11\": {\"type\": \"boolean\", \"description\": \"Force an XWayland-controllable app. Defaults to true when waitForWindow is provided; set false to permit native Wayland\"},"
 		"    \"env\": {\"type\": \"object\", \"description\": \"Environment variables; display/session routing keys are ignored inside isolated sessions\"}"
 		"  },"
 		"  \"required\": [\"command\"]"

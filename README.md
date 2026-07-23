@@ -142,6 +142,13 @@ Deskpal remains connected to the user's desktop and creates Xvfb sessions only
 for tasks that should not interrupt it. The agent chooses the launch tool from
 the goal:
 
+When `launch_app` is given `waitForWindow`, it defaults to launching through
+XWayland so the resulting window can be discovered and controlled by Deskpal's
+X11 backend. Set `forceX11: false` to permit a native Wayland surface when
+window matching and control are not required. Applications that delegate to an
+already-running native Wayland process may still need that process closed or a
+separate application profile.
+
 Private children inherit the parent's already-locked control-file descriptor
 and validate its inode, ownership, permissions, and kernel lock before serving
 tools. Supplying `--xvfb-child`, headless environment variables, a fake file
