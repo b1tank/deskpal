@@ -119,6 +119,8 @@ broker actions will drive.
         and increment preconditions.
   - [x] Ship capture-bound verified `agent_semantic_select` with fresh direct
         child bounds and selected-state verification.
+  - [x] Verify expandable controls and idempotency through advertised actions
+        and the AT-SPI `expanded` state.
   - [ ] Identify a toolkit with working AT-SPI `Component.scroll_to`; GTK3 and
         GTK4 fixture probes currently fail, and no disruptive fallback is allowed.
 - [ ] Test an explicit, user-approved session accessibility setup that lets

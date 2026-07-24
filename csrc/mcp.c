@@ -277,7 +277,7 @@ static int valid_accessibility_state(const char *state)
 {
 	static const char *states[] = {
 		"focused", "checked", "selected", "enabled", "editable",
-		"showing", NULL
+		"showing", "expanded", NULL
 	};
 	for (int i = 0; states[i]; i++)
 		if (strcmp(state, states[i]) == 0) return 1;

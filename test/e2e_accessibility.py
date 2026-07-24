@@ -315,6 +315,11 @@ def run_rich_suite(env):
         checkbox_node = next(
             node for node in nodes if node["name"] == "Approval checkbox"
         )
+        expander_node = next(
+            node for node in nodes if node["name"] == "Advanced options"
+        )
+        assert expander_node["states"]["expanded"] is False, expander_node
+        assert expander_node["actions"], expander_node
         volume_node = next(
             node for node in nodes if node["name"] == "Volume value"
         )
@@ -726,6 +731,34 @@ def run_rich_suite(env):
         invoke_checkbox = accessibility_payload(invoke_checkbox_result)
         assert invoke_checkbox["success"] is True, invoke_checkbox
         assert invoke_checkbox["verification"]["actualStateValue"] is True
+
+        expand_arguments = {
+            "application": "accessibility_app.py",
+            "window": TITLE,
+            "target": {
+                "role": expander_node["role"],
+                "name": "Advanced options",
+            },
+            "operation": "invoke",
+            "action": expander_node["actions"][0],
+            "verify": {
+                "role": expander_node["role"],
+                "name": "Advanced options",
+                "state": "expanded",
+                "stateValue": True,
+            },
+        }
+        expand_result = accessibility_payload(
+            client.tool("accessibility_action", expand_arguments)
+        )
+        assert expand_result["verified"] is True, expand_result
+        assert expand_result["actionApplied"] is True, expand_result
+        assert expand_result["verification"]["actualStateValue"] is True
+        idempotent_expand = accessibility_payload(
+            client.tool("accessibility_action", expand_arguments)
+        )
+        assert idempotent_expand["verified"] is True, idempotent_expand
+        assert idempotent_expand["actionApplied"] is False, idempotent_expand
 
         failed_verification_result = client.tool(
             "accessibility_action",
@@ -1670,6 +1703,7 @@ def main():
                 assert action_schema["properties"]["target"]["properties"]["objectPath"]["maxLength"] == 1024
                 assert action_schema["properties"]["target"]["properties"]["processId"]["type"] == "integer"
                 assert action_schema["properties"]["verify"]["properties"]["stateValue"]["type"] == "boolean"
+                assert "expanded" in action_schema["properties"]["verify"]["properties"]["state"]["enum"]
                 target_conditions = action_schema["properties"]["target"]["allOf"]
                 assert {
                     "busName", "objectPath", "processId"

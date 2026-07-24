@@ -226,6 +226,10 @@ def run_suite():
             node for node in semantic_nodes
             if node.get("name") == "Approval checkbox"
         )
+        semantic_expander = next(
+            node for node in semantic_nodes
+            if node.get("name") == "Advanced options"
+        )
         semantic_volume = next(
             node for node in semantic_nodes
             if node.get("name") == "Volume value"
@@ -401,6 +405,49 @@ def run_suite():
         assert idempotent_toggle["actionApplied"] is False, idempotent_toggle
         assert idempotent_toggle["inputDelivered"] is False, idempotent_toggle
         owner.tool("agent_cursor_hide", {"cursorId": "semantic-toggle-live"})
+        expand_arguments = {
+            "captureId": app_state["captureId"],
+            "target": semantic_expander["locator"],
+            "action": semantic_expander["actions"][0],
+            "verify": {
+                "role": semantic_expander["role"],
+                "name": "Advanced options",
+                "state": "expanded",
+                "stateValue": True,
+            },
+            "cursorId": "semantic-expand-live",
+            "color": "#84CC16",
+            "label": "semantic expand",
+        }
+        expand_result = json.loads(
+            text(owner.tool("agent_semantic_press", expand_arguments))
+        )
+        assert expand_result["verified"] is True, expand_result
+        assert expand_result["actionApplied"] is True, expand_result
+        assert expand_result["sharedPointerMoved"] is False, expand_result
+        expanded_state_result = owner.tool(
+            "get_app_state", {"windowName": fixture_title}
+        )
+        expanded_state = expanded_state_result["appState"]
+        expanded_node = next(
+            node for node in find_semantic_nodes(expanded_state["semantic"])
+            if node.get("name") == "Advanced options"
+        )
+        idempotent_expand = json.loads(
+            text(
+                owner.tool(
+                    "agent_semantic_press",
+                    {
+                        **expand_arguments,
+                        "captureId": expanded_state["captureId"],
+                        "target": expanded_node["locator"],
+                    },
+                )
+            )
+        )
+        assert idempotent_expand["verified"] is True, idempotent_expand
+        assert idempotent_expand["actionApplied"] is False, idempotent_expand
+        owner.tool("agent_cursor_hide", {"cursorId": "semantic-expand-live"})
         press_hidden = json.loads(
             text(owner.tool("agent_cursor_hide", {"cursorId": "semantic-live"}))
         )

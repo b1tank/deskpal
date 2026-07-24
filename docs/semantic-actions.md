@@ -70,8 +70,9 @@ application mutation.
   currently reported as unknown rather than falsely claimed unchanged.
 - These first slices implement invoke/press, verified checkbox toggles through
   press, whole-value text replacement, numeric/range value mutation, and direct
-  child selection. Text-range, scroll, menu, and expandable-control routes
-  remain future work.
+  child selection, and expandable controls through advertised actions plus the
+  `expanded` state. Text-range, scroll, and menu-specific routes remain future
+  work.
 - Semantic `Component.scroll_to` was probed against deterministic GTK3 and GTK4
   scrolled fixtures on this development desktop. Both reported failure or an
   unknown outcome and did not make the target showing, so Deskpal does not

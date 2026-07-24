@@ -385,6 +385,8 @@ static cJSON *serialize_states(AtspiStateSet *states)
 		state_contains(states, ATSPI_STATE_CHECKED));
 	cJSON_AddBoolToObject(result, "selected",
 		state_contains(states, ATSPI_STATE_SELECTED));
+	cJSON_AddBoolToObject(result, "expanded",
+		state_contains(states, ATSPI_STATE_EXPANDED));
 	return result;
 }
 
@@ -969,6 +971,7 @@ static int selector_state(const char *name, AtspiStateType *state)
 	else if (strcmp(name, "enabled") == 0) *state = ATSPI_STATE_ENABLED;
 	else if (strcmp(name, "editable") == 0) *state = ATSPI_STATE_EDITABLE;
 	else if (strcmp(name, "showing") == 0) *state = ATSPI_STATE_SHOWING;
+	else if (strcmp(name, "expanded") == 0) *state = ATSPI_STATE_EXPANDED;
 	else return -1;
 	return 0;
 }

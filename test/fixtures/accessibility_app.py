@@ -153,6 +153,11 @@ checkbox = Gtk.CheckButton(label="Approved")
 checkbox.get_accessible().set_name("Approval checkbox")
 layout.pack_start(checkbox, False, False, 0)
 
+expander = Gtk.Expander(label="Advanced options")
+expander.get_accessible().set_name("Advanced options")
+expander.add(Gtk.Label(label="Expanded content"))
+layout.pack_start(expander, False, False, 0)
+
 volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
 volume.set_value(25)
 volume.set_digits(0)
