@@ -81,7 +81,8 @@ They require a real X11/Xwayland display, `/dev/uinput` access for full input
 coverage, and the named applications. `test:indicator-live` additionally
 requires the installed GNOME extension and verifies full/downscaled capture
 mapping, edge placement, restyling, capture-bound verified semantic press,
-text replacement, and numeric value mutation, cross-process isolation, graceful
+text replacement, numeric value mutation, and direct-child selection,
+cross-process isolation, graceful
 and forced-death cleanup, and
 pointer/focus/stacking/clipboard non-interference.
 Screenshot artifacts go under `/tmp`.

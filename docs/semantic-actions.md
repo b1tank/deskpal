@@ -1,8 +1,8 @@
 # Capture-bound semantic actions
 
-`agent_semantic_press`, `agent_semantic_set_text`, and
-`agent_semantic_set_value` are Deskpal's first end-to-end non-pointer action
-routes. They connect an exact `get_app_state`
+`agent_semantic_press`, `agent_semantic_set_text`,
+`agent_semantic_set_value`, and `agent_semantic_select` are Deskpal's first
+end-to-end non-pointer action routes. They connect an exact `get_app_state`
 observation, the logical agent cursor, and a verified AT-SPI mutation without
 falling back to XTest, uinput, forced focus, coordinate clicking, keyboard
 input, or clipboard replacement.
@@ -20,7 +20,11 @@ The caller supplies:
   mutation supplies its own exact-value verification; or
 - for `agent_semantic_set_value`, one finite value within the freshly observed
   minimum/maximum and aligned to its minimum increment. Numeric verification is
-  exact within a `1e-6` tolerance.
+  exact within a `1e-6` tolerance; or
+- for `agent_semantic_select`, one direct child index within the freshly
+  observed AT-SPI selection container. Verification checks that exact child is
+  selected; exclusivity is guaranteed only when the control itself is
+  single-select.
 
 Deskpal revalidates the captured X11 identity and geometry, refreshes the exact
 AT-SPI window, filters it to the captured PID, re-resolves the complete locator,
@@ -65,6 +69,6 @@ application mutation.
 - Focus changes are measured when X11 focus is knowable. Stacking changes are
   currently reported as unknown rather than falsely claimed unchanged.
 - These first slices implement invoke/press, verified checkbox toggles through
-  press, whole-value text replacement, and numeric/range value mutation.
-  Selection, text-range, scroll, menu, and expandable-control routes remain
-  future work.
+  press, whole-value text replacement, numeric/range value mutation, and direct
+  child selection. Text-range, scroll, menu, and expandable-control routes
+  remain future work.

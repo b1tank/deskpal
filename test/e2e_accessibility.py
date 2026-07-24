@@ -230,6 +230,9 @@ def run_rich_suite(env):
         app_state_volume = next(
             node for node in app_state_nodes if node["name"] == "Volume value"
         )
+        app_state_choice_list = next(
+            node for node in app_state_nodes if node["name"] == "Choice list"
+        )
         entry_bounds = app_state_entry["bounds"]
         entry_stage_x = (
             (entry_bounds["x"] + entry_bounds["width"] / 2)
@@ -322,6 +325,14 @@ def run_rich_suite(env):
             "maximum": 100,
             "minimumIncrement": 1,
         }, volume_node
+        choice_list_node = next(
+            node for node in nodes if node["name"] == "Choice list"
+        )
+        assert choice_list_node["selection"] == {
+            "childCount": 3,
+            "selectedChildCount": 1,
+            "selectedChildIndices": [0],
+        }, choice_list_node
 
         focused_result = client.tool(
             "get_focused_element",
@@ -448,6 +459,27 @@ def run_rich_suite(env):
             if node["name"] == "Volume value"
         )
         assert unchanged_volume["value"]["current"] == 25, unchanged_volume
+        unavailable_indicator_selection = client.tool(
+            "agent_semantic_select",
+            {
+                "captureId": app_state["captureId"],
+                "target": app_state_choice_list["locator"],
+                "value": 2,
+            },
+        )
+        assert unavailable_indicator_selection.get("isError") is True
+        assert "indicator" in text(unavailable_indicator_selection).lower()
+        unchanged_selection_tree = accessibility_payload(
+            client.tool(
+                "get_accessibility_tree",
+                {"application": "accessibility_app.py", "window": TITLE},
+            )
+        )
+        unchanged_choice_list = next(
+            node for node in find_nodes(unchanged_selection_tree)
+            if node["name"] == "Choice list"
+        )
+        assert unchanged_choice_list["selection"]["selectedChildIndices"] == [0]
 
         set_text_result = client.tool(
             "accessibility_action",
@@ -553,6 +585,62 @@ def run_rich_suite(env):
         assert out_of_range_value["mutationIssued"] is False, out_of_range_value
         assert out_of_range_value["errorCode"] == "precondition_failed"
 
+        select_result = accessibility_payload(
+            client.tool(
+                "accessibility_action",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "target": {
+                        "role": choice_list_node["role"],
+                        "name": "Choice list",
+                    },
+                    "operation": "select",
+                    "value": 1,
+                },
+            )
+        )
+        assert select_result["verified"] is True, select_result
+        assert select_result["actionApplied"] is True, select_result
+        assert select_result["verification"]["beforeSelected"] is False
+        assert select_result["verification"]["actualSelected"] is True
+        assert select_result["verification"]["expectedSelectedChildIndex"] == 1
+        idempotent_selection = accessibility_payload(
+            client.tool(
+                "accessibility_action",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "target": {
+                        "role": choice_list_node["role"],
+                        "name": "Choice list",
+                    },
+                    "operation": "select",
+                    "value": 1,
+                },
+            )
+        )
+        assert idempotent_selection["verified"] is True, idempotent_selection
+        assert idempotent_selection["actionApplied"] is False, idempotent_selection
+        invalid_selection = accessibility_payload(
+            client.tool(
+                "accessibility_action",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "target": {
+                        "role": choice_list_node["role"],
+                        "name": "Choice list",
+                    },
+                    "operation": "select",
+                    "value": 3,
+                },
+            )
+        )
+        assert invalid_selection["verified"] is False, invalid_selection
+        assert invalid_selection["mutationIssued"] is False, invalid_selection
+        assert invalid_selection["errorCode"] == "selection_unavailable"
+
         focus_result = client.tool(
             "accessibility_action",
             {
@@ -650,7 +738,7 @@ def run_rich_suite(env):
                 },
                 "operation": "invoke",
                 "action": "click",
-                "timeoutMs": 750,
+                "timeoutMs": 2000,
                 "verify": {
                     "role": "label",
                     "name": "Fixture status",
@@ -1362,6 +1450,23 @@ def run_rich_suite(env):
         )
         assert routed_set_value.get("isError") is True, routed_set_value
         assert "visible desktop only" in text(routed_set_value), routed_set_value
+        routed_select = client.tool(
+            "agent_semantic_select",
+            {
+                "sessionId": isolated_id,
+                "captureId": "capture-dummy",
+                "target": {
+                    "role": "list box",
+                    "path": [0],
+                    "busName": ":1.1",
+                    "objectPath": "/dummy",
+                    "processId": 1,
+                },
+                "value": 1,
+            },
+        )
+        assert routed_select.get("isError") is True, routed_select
+        assert "visible desktop only" in text(routed_select), routed_select
         client.tool("close_isolated_session", {"sessionId": isolated_id})
 
         direct_env = env.copy()
@@ -1535,6 +1640,7 @@ def main():
                     "agent_semantic_press",
                     "agent_semantic_set_text",
                     "agent_semantic_set_value",
+                    "agent_semantic_select",
                 ):
                     tool = tool_by_name(tools, name)
                     assert "sessionId" not in tool["inputSchema"]["properties"], tool
@@ -1596,6 +1702,14 @@ def main():
                 ]
                 assert set_value_schema["properties"]["value"]["type"] == "number"
                 assert set_value_schema["properties"]["timeoutMs"]["default"] == 3000
+                select_schema = tool_by_name(
+                    tools, "agent_semantic_select"
+                )["inputSchema"]
+                assert select_schema["required"] == [
+                    "captureId", "target", "value"
+                ]
+                assert select_schema["properties"]["value"]["type"] == "integer"
+                assert select_schema["properties"]["timeoutMs"]["default"] == 3000
                 verify_conditions = action_schema["properties"]["verify"]["allOf"]
                 assert {
                     "busName", "objectPath", "processId"
@@ -1603,8 +1717,9 @@ def main():
                 operation_conditions = action_schema["allOf"]
                 assert "value" in operation_conditions[0]["then"]["required"]
                 assert "value" in operation_conditions[1]["then"]["required"]
+                assert "value" in operation_conditions[2]["then"]["required"]
                 assert {"action", "verify"}.issubset(
-                    operation_conditions[2]["then"]["required"]
+                    operation_conditions[3]["then"]["required"]
                 )
                 for nul_arguments in (
                     {

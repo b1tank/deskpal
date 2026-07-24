@@ -159,6 +159,16 @@ volume.set_digits(0)
 volume.get_accessible().set_name("Volume value")
 layout.pack_start(volume, False, False, 0)
 
+choice_list = Gtk.ListBox()
+choice_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+choice_list.get_accessible().set_name("Choice list")
+for choice in ("Alpha choice", "Beta choice", "Gamma choice"):
+    row = Gtk.ListBoxRow()
+    row.add(Gtk.Label(label=choice))
+    choice_list.add(row)
+choice_list.select_row(choice_list.get_row_at_index(0))
+layout.pack_start(choice_list, False, False, 0)
+
 for label in ("Duplicate A", "Duplicate B"):
     duplicate = Gtk.Button(label=label)
     duplicate.get_accessible().set_name("Duplicate action")

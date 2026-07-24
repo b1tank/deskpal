@@ -156,6 +156,7 @@ def run_suite():
         assert environment["capabilities"]["semanticPress"]["available"] is True, environment
         assert environment["capabilities"]["semanticSetText"]["available"] is True, environment
         assert environment["capabilities"]["semanticSetValue"]["available"] is True, environment
+        assert environment["capabilities"]["semanticSelect"]["available"] is True, environment
         assert environment["capabilities"]["backgroundPixelInput"]["available"] is False, environment
         blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
         assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
@@ -228,6 +229,10 @@ def run_suite():
         semantic_volume = next(
             node for node in semantic_nodes
             if node.get("name") == "Volume value"
+        )
+        semantic_choice_list = next(
+            node for node in semantic_nodes
+            if node.get("name") == "Choice list"
         )
         press_baseline = desktop_state()
         press_arguments = {
@@ -337,6 +342,37 @@ def run_suite():
         assert invalid_value_payload["mutationIssued"] is False
         assert invalid_value_payload["inputDelivered"] is False
         owner.tool("agent_cursor_hide", {"cursorId": "semantic-value-live"})
+        selection_arguments = {
+            "captureId": app_state["captureId"],
+            "target": semantic_choice_list["locator"],
+            "value": 2,
+            "cursorId": "semantic-select-live",
+            "color": "#06B6D4",
+            "label": "semantic selection",
+        }
+        selection_result = json.loads(
+            text(owner.tool("agent_semantic_select", selection_arguments))
+        )
+        assert selection_result["route"] == "atspi", selection_result
+        assert selection_result["operation"] == "select", selection_result
+        assert selection_result["verified"] is True, selection_result
+        assert selection_result["actionApplied"] is True, selection_result
+        assert selection_result["inputDelivered"] is True, selection_result
+        assert selection_result["action"]["verification"]["actualSelected"] is True
+        idempotent_selection = json.loads(
+            text(owner.tool("agent_semantic_select", selection_arguments))
+        )
+        assert idempotent_selection["verified"] is True, idempotent_selection
+        assert idempotent_selection["actionApplied"] is False, idempotent_selection
+        invalid_selection = owner.tool(
+            "agent_semantic_select",
+            {**selection_arguments, "value": 3},
+        )
+        assert invalid_selection.get("isError") is True, invalid_selection
+        invalid_selection_payload = json.loads(text(invalid_selection))
+        assert invalid_selection_payload["mutationIssued"] is False
+        assert invalid_selection_payload["inputDelivered"] is False
+        owner.tool("agent_cursor_hide", {"cursorId": "semantic-select-live"})
         toggle_arguments = {
             "captureId": app_state["captureId"],
             "target": semantic_checkbox["locator"],

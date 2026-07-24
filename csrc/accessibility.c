@@ -121,6 +121,8 @@ typedef struct {
 	int state_observed;
 	double value;
 	int value_observed;
+	int selected;
+	int selection_observed;
 	int satisfied;
 } AccessibilityVerification;
 
@@ -436,6 +438,40 @@ static cJSON *serialize_value(AtspiAccessible *node)
 	return result;
 }
 
+static cJSON *serialize_selection(AtspiAccessible *node)
+{
+	if (!prepare_atspi_call()) return NULL;
+	AtspiSelection *selection = atspi_accessible_get_selection_iface(node);
+	if (!selection) return NULL;
+	GError *error = NULL;
+	int selected_count = atspi_selection_get_n_selected_children(selection, &error);
+	int child_count = error ? -1 : accessible_child_count(node);
+	if (error || selected_count < 0 || child_count < 0) {
+		clear_error(&error);
+		g_object_unref(selection);
+		return NULL;
+	}
+	cJSON *result = cJSON_CreateObject();
+	cJSON_AddNumberToObject(result, "childCount", child_count);
+	cJSON_AddNumberToObject(result, "selectedChildCount", selected_count);
+	cJSON *indices = cJSON_CreateArray();
+	cJSON_AddItemToObject(result, "selectedChildIndices", indices);
+	for (int i = 0; i < child_count; i++) {
+		if (!prepare_atspi_call()) break;
+		gboolean selected = atspi_selection_is_child_selected(
+			selection, i, &error);
+		if (error) {
+			clear_error(&error);
+			cJSON_Delete(result);
+			g_object_unref(selection);
+			return NULL;
+		}
+		if (selected) cJSON_AddItemToArray(indices, cJSON_CreateNumber(i));
+	}
+	g_object_unref(selection);
+	return result;
+}
+
 static cJSON *serialize_actions(AtspiAccessible *node, int *actionable,
 	                            int *truncated)
 {
@@ -551,6 +587,8 @@ static cJSON *serialize_node(AtspiAccessible *node,
 	if (bounds) cJSON_AddItemToObject(result, "bounds", bounds);
 	cJSON *value = serialize_value(node);
 	if (value) cJSON_AddItemToObject(result, "value", value);
+	cJSON *selection = serialize_selection(node);
+	if (selection) cJSON_AddItemToObject(result, "selection", selection);
 	int actions_truncated = 0;
 	cJSON_AddItemToObject(result, "actions",
 		serialize_actions(node, actionable, &actions_truncated));
@@ -1028,6 +1066,47 @@ static AccessibilityMutation perform_set_value(AtspiAccessible *node,
 	return outcome;
 }
 
+static int node_selection(AtspiAccessible *node, int child_index,
+                          int *child_count, int *selected)
+{
+	if (!prepare_atspi_call()) return -1;
+	AtspiSelection *selection = atspi_accessible_get_selection_iface(node);
+	if (!selection) return -1;
+	*child_count = accessible_child_count(node);
+	if (child_index < 0 || child_index >= *child_count) {
+		g_object_unref(selection);
+		return -1;
+	}
+	GError *error = NULL;
+	*selected = atspi_selection_is_child_selected(
+		selection, child_index, &error);
+	g_object_unref(selection);
+	if (error) {
+		clear_error(&error);
+		return -1;
+	}
+	return 0;
+}
+
+static AccessibilityMutation perform_select(AtspiAccessible *node,
+                                             int child_index)
+{
+	AccessibilityMutation outcome = {0};
+	if (!prepare_atspi_call()) return outcome;
+	AtspiSelection *selection = atspi_accessible_get_selection_iface(node);
+	if (!selection) return outcome;
+	GError *error = NULL;
+	if (prepare_atspi_call()) {
+		outcome.issued = 1;
+		outcome.reported_success = atspi_selection_select_child(
+			selection, child_index, &error);
+		outcome.outcome_unknown = error != NULL;
+	}
+	g_object_unref(selection);
+	clear_error(&error);
+	return outcome;
+}
+
 static AccessibilityMutation perform_focus(AtspiAccessible *node)
 {
 	AccessibilityMutation outcome = {0};
@@ -1147,12 +1226,14 @@ static int evaluate_verification(AtspiAccessible *node,
 	                             int verify_state, AtspiStateType expected_state,
 	                             int expected_state_value,
 	                             int verify_value, double expected_value,
+	                             int verify_selection, int expected_child_index,
 	                             AccessibilityVerification *verification)
 {
 	clear_verification(verification);
 	int text_satisfied = !verify_text;
 	int state_satisfied = !verify_state;
 	int value_satisfied = !verify_value;
+	int selection_satisfied = !verify_selection;
 	if (verify_text) {
 		verification->text = action_text(node,
 			&verification->text_truncated);
@@ -1183,7 +1264,16 @@ static int evaluate_verification(AtspiAccessible *node,
 		verification->value_observed = 1;
 		value_satisfied = fabs(verification->value - expected_value) <= 1e-6;
 	}
-	verification->satisfied = text_satisfied && state_satisfied && value_satisfied;
+	if (verify_selection) {
+		int child_count = 0;
+		if (node_selection(node, expected_child_index,
+		                   &child_count, &verification->selected) != 0)
+			return -1;
+		verification->selection_observed = 1;
+		selection_satisfied = verification->selected;
+	}
+	verification->satisfied = text_satisfied && state_satisfied &&
+	                         value_satisfied && selection_satisfied;
 	return 0;
 }
 
@@ -1714,6 +1804,8 @@ cJSON *accessibility_action(const cJSON *params)
 	int verify_state = 0;
 	int verify_value = 0;
 	double expected_value = 0;
+	int verify_selection = 0;
+	int expected_child_index = -1;
 	AccessibilityIdentity target_identity = {0};
 	AccessibilityIdentity verify_identity = {0};
 	AtspiAction *prepared_action = NULL;
@@ -1745,6 +1837,9 @@ cJSON *accessibility_action(const cJSON *params)
 		} else if (strcmp(operation, "setValue") == 0) {
 			expected_value = cJSON_GetObjectItem(params, "value")->valuedouble;
 			verify_value = 1;
+		} else if (strcmp(operation, "select") == 0) {
+			expected_child_index = cJSON_GetObjectItem(params, "value")->valueint;
+			verify_selection = 1;
 		} else {
 			expected_state_name = "focused";
 			expected_state = ATSPI_STATE_FOCUSED;
@@ -1802,6 +1897,8 @@ cJSON *accessibility_action(const cJSON *params)
 	double minimum_value = 0;
 	double maximum_value = 0;
 	double value_increment = 0;
+	int selection_child_count = 0;
+	int selection_selected = 0;
 	if (node_state(target_search.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
@@ -1830,6 +1927,20 @@ cJSON *accessibility_action(const cJSON *params)
 		cJSON_AddNumberToObject(precondition, "minimumValue", minimum_value);
 		cJSON_AddNumberToObject(precondition, "maximumValue", maximum_value);
 		cJSON_AddNumberToObject(precondition, "minimumIncrement", value_increment);
+	}
+	if (strcmp(operation, "select") == 0) {
+		if (node_selection(target_search.match, expected_child_index,
+		                   &selection_child_count, &selection_selected) != 0) {
+			cJSON_AddStringToObject(result, "errorCode", "selection_unavailable");
+			cJSON_AddStringToObject(result, "error",
+				"Target does not expose the requested AT-SPI selection child");
+			cJSON_Delete(precondition);
+			release_search(&target_search);
+			goto action_done;
+		}
+		cJSON_AddNumberToObject(precondition, "selectionChildCount",
+		                       selection_child_count);
+		cJSON_AddBoolToObject(precondition, "selected", selection_selected);
 	}
 	cJSON_AddItemToObject(result, "precondition", precondition);
 	if (!enabled || !showing ||
@@ -1883,11 +1994,14 @@ cJSON *accessibility_action(const cJSON *params)
 	}
 	if (verify_value)
 		cJSON_AddNumberToObject(verification, "expectedValue", expected_value);
+	if (verify_selection)
+		cJSON_AddNumberToObject(verification, "expectedSelectedChildIndex",
+		                       expected_child_index);
 	AccessibilityVerification before = {0};
 	if (evaluate_verification(verify_pre.match,
 	    verify_text, expected_text, verify_state, expected_state,
 	    expected_state_value, verify_value, expected_value,
-	    &before) != 0 || g_query_error_count > 0) {
+	    verify_selection, expected_child_index, &before) != 0 || g_query_error_count > 0) {
 		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
 		cJSON_AddStringToObject(result, "error",
 			"Verification postcondition could not be read exactly before mutation");
@@ -1903,6 +2017,8 @@ cJSON *accessibility_action(const cJSON *params)
 			before.state_value);
 	if (before.value_observed)
 		cJSON_AddNumberToObject(verification, "beforeValue", before.value);
+	if (before.selection_observed)
+		cJSON_AddBoolToObject(verification, "beforeSelected", before.selected);
 	cJSON_AddBoolToObject(verification, "alreadySatisfied", before.satisfied);
 	cJSON_AddItemToObject(result, "verification", verification);
 	release_search(&verify_pre);
@@ -1939,6 +2055,8 @@ cJSON *accessibility_action(const cJSON *params)
 				before.state_value);
 		if (before.value_observed)
 			cJSON_AddNumberToObject(verification, "actualValue", before.value);
+		if (before.selection_observed)
+			cJSON_AddBoolToObject(verification, "actualSelected", before.selected);
 		clear_verification(&before);
 		release_search(&target_search);
 		clear_identity(&target_identity);
@@ -1975,6 +2093,9 @@ cJSON *accessibility_action(const cJSON *params)
 		node_accepts_value(target_search.match, expected_value,
 		                   &current_value, &minimum_value, &maximum_value,
 		                   &value_increment);
+	int selection_precondition_valid = strcmp(operation, "select") != 0 ||
+		node_selection(target_search.match, expected_child_index,
+		               &selection_child_count, &selection_selected) == 0;
 	if (node_state(target_search.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
 	    node_state(target_search.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
@@ -1982,7 +2103,7 @@ cJSON *accessibility_action(const cJSON *params)
 	    !enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
 	    (strcmp(operation, "setText") == 0 && !editable) ||
-	    !value_precondition_valid) {
+	    !value_precondition_valid || !selection_precondition_valid) {
 		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
 		cJSON_AddStringToObject(result, "error",
 			"Target preconditions changed before mutation");
@@ -2014,7 +2135,7 @@ cJSON *accessibility_action(const cJSON *params)
 	if (evaluate_verification(verify_before_action.match,
 	    verify_text, expected_text, verify_state, expected_state,
 	    expected_state_value, verify_value, expected_value,
-	    &immediate) != 0 || g_query_error_count > 0) {
+	    verify_selection, expected_child_index, &immediate) != 0 || g_query_error_count > 0) {
 		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
 		cJSON_AddStringToObject(result, "error",
 			"Verification postcondition could not be read immediately before mutation");
@@ -2038,6 +2159,8 @@ cJSON *accessibility_action(const cJSON *params)
 				immediate.state_value);
 		if (immediate.value_observed)
 			cJSON_AddNumberToObject(verification, "actualValue", immediate.value);
+		if (immediate.selection_observed)
+			cJSON_AddBoolToObject(verification, "actualSelected", immediate.selected);
 		clear_verification(&immediate);
 		release_search(&target_search);
 		goto action_done;
@@ -2069,6 +2192,9 @@ cJSON *accessibility_action(const cJSON *params)
 		node_accepts_value(target_dispatch.match, expected_value,
 		                   &current_value, &minimum_value, &maximum_value,
 		                   &value_increment);
+	selection_precondition_valid = strcmp(operation, "select") != 0 ||
+		node_selection(target_dispatch.match, expected_child_index,
+		               &selection_child_count, &selection_selected) == 0;
 	if (node_state(target_dispatch.match, ATSPI_STATE_ENABLED, &enabled) != 0 ||
 	    node_state(target_dispatch.match, ATSPI_STATE_SHOWING, &showing) != 0 ||
 	    node_state(target_dispatch.match, ATSPI_STATE_FOCUSABLE, &focusable) != 0 ||
@@ -2076,7 +2202,7 @@ cJSON *accessibility_action(const cJSON *params)
 	    !enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
 	    (strcmp(operation, "setText") == 0 && !editable) ||
-	    !value_precondition_valid) {
+	    !value_precondition_valid || !selection_precondition_valid) {
 		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
 		cJSON_AddStringToObject(result, "error",
 			"Target preconditions changed immediately before mutation");
@@ -2129,7 +2255,7 @@ cJSON *accessibility_action(const cJSON *params)
 	if (evaluate_verification(verify_dispatch.match,
 	    verify_text, expected_text, verify_state, expected_state,
 	    expected_state_value, verify_value, expected_value,
-	    &dispatch_verification) != 0 ||
+	    verify_selection, expected_child_index, &dispatch_verification) != 0 ||
 	    g_query_error_count > 0) {
 		cJSON_AddStringToObject(result, "errorCode", "verification_unreadable");
 		cJSON_AddStringToObject(result, "error",
@@ -2155,6 +2281,9 @@ cJSON *accessibility_action(const cJSON *params)
 		if (dispatch_verification.value_observed)
 			cJSON_AddNumberToObject(verification, "actualValue",
 			                        dispatch_verification.value);
+		if (dispatch_verification.selection_observed)
+			cJSON_AddBoolToObject(verification, "actualSelected",
+			                      dispatch_verification.selected);
 		clear_verification(&dispatch_verification);
 		release_search(&target_search);
 		goto action_done;
@@ -2166,6 +2295,8 @@ cJSON *accessibility_action(const cJSON *params)
 		mutation = perform_set_text(target_search.match, expected_text);
 	} else if (strcmp(operation, "setValue") == 0) {
 		mutation = perform_set_value(target_search.match, expected_value);
+	} else if (strcmp(operation, "select") == 0) {
+		mutation = perform_select(target_search.match, expected_child_index);
 	} else if (strcmp(operation, "focus") == 0) {
 		mutation = perform_focus(target_search.match);
 	} else {
@@ -2242,7 +2373,7 @@ cJSON *accessibility_action(const cJSON *params)
 			if (evaluate_verification(post.match,
 			    verify_text, expected_text, verify_state, expected_state,
 			    expected_state_value, verify_value, expected_value,
-			    &observed) != 0) {
+			    verify_selection, expected_child_index, &observed) != 0) {
 				verification_incomplete = 1;
 				release_search(&post);
 				break;
@@ -2264,6 +2395,8 @@ cJSON *accessibility_action(const cJSON *params)
 			observed.state_value);
 	if (observed.value_observed)
 		cJSON_AddNumberToObject(verification, "actualValue", observed.value);
+	if (observed.selection_observed)
+		cJSON_AddBoolToObject(verification, "actualSelected", observed.selected);
 	if (!verified && g_query_timed_out &&
 	    verification_was_readable)
 		verification_incomplete = 0;
