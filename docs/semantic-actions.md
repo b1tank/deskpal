@@ -78,3 +78,8 @@ application mutation.
   unknown outcome and did not make the target showing, so Deskpal does not
   advertise a scroll route or fall back to wheel, keyboard, or scrollbar input.
   A supported target toolkit must be identified before this operation can ship.
+- GTK3 menu-button/popover probing could verify the menu button's `checked`
+  state after opening, but the exposed menu item remained `showing: false` with
+  invalid offscreen bounds. Deskpal therefore does not advertise menu-item
+  navigation or bypass its showing/bounds preconditions. Native detached and
+  popover menu coverage remains blocked pending a trustworthy semantic tree.
