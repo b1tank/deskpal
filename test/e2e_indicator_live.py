@@ -1,29 +1,20 @@
 #!/usr/bin/env python3
-"""Live GNOME acceptance for capture-bound, process-owned agent cursors."""
+"""Short live GNOME indicator lifecycle test that never focuses an app."""
 
 import ast
 import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 
 from deskpal_client import DESKPAL, DeskpalClient, text
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ACCESSIBILITY_FIXTURE = os.path.join(ROOT, "test", "fixtures", "accessibility_app.py")
-
 GDBUS_STATUS = [
-    "gdbus",
-    "call",
-    "--session",
-    "--dest",
-    "org.deskpal.Indicator",
-    "--object-path",
-    "/org/deskpal/Indicator",
-    "--method",
-    "org.deskpal.Indicator.GetStatus",
+    "gdbus", "call", "--session",
+    "--dest", "org.deskpal.Indicator",
+    "--object-path", "/org/deskpal/Indicator",
+    "--method", "org.deskpal.Indicator.GetStatus",
 ]
 
 
@@ -41,12 +32,10 @@ def raw_status():
     return json.loads(ast.literal_eval(output)[0])
 
 
-def command_output(*args):
-    return subprocess.check_output(args)
-
-
 def pointer_coordinates():
-    output = command_output("xdotool", "getmouselocation", "--shell")
+    output = subprocess.check_output(
+        ["xdotool", "getmouselocation", "--shell"]
+    )
     return b"\n".join(
         line for line in output.splitlines()
         if line.startswith((b"X=", b"Y=", b"SCREEN="))
@@ -62,44 +51,14 @@ def desktop_state():
     ).stdout
     return {
         "pointer": pointer_coordinates(),
-        "focus": command_output("xprop", "-root", "_NET_ACTIVE_WINDOW"),
-        "stacking": command_output("xprop", "-root", "_NET_CLIENT_LIST_STACKING"),
+        "focus": subprocess.check_output(
+            ["xprop", "-root", "_NET_ACTIVE_WINDOW"]
+        ),
+        "stacking": subprocess.check_output(
+            ["xprop", "-root", "_NET_CLIENT_LIST_STACKING"]
+        ),
         "clipboard": clipboard,
     }
-
-
-def move(client, capture, x, y, cursor_id, color, label):
-    metadata = capture.get("screenshot", capture.get("appState"))
-    result = client.tool(
-        "agent_cursor_move",
-        {
-            "captureId": metadata["captureId"],
-            "x": x,
-            "y": y,
-            "cursorId": cursor_id,
-            "color": color,
-            "label": label,
-        },
-    )
-    payload = json.loads(text(result))
-    assert payload["verified"] is True, payload
-    assert payload["indicatorMoved"] is True, payload
-    assert payload["inputDelivered"] is False, payload
-    return payload
-
-
-def find_semantic_nodes(payload):
-    found = []
-
-    def visit(nodes):
-        for node in nodes:
-            found.append(node)
-            visit(node.get("children", []))
-
-    for application in payload.get("applications", []):
-        for window in application.get("windows", []):
-            visit(window.get("nodes", []))
-    return found
 
 
 def wait_until_removed(remote_id, timeout=2):
@@ -111,596 +70,73 @@ def wait_until_removed(remote_id, timeout=2):
     raise AssertionError(f"cursor survived owner exit: {remote_id}")
 
 
+def assert_unchanged(before, after):
+    for key, value in before.items():
+        assert after[key] == value, {
+            "changedState": key,
+            "before": value,
+            "after": after[key],
+        }
+
+
 def run_suite():
     require_dependencies()
-    fixture_title = "Deskpal Accessibility Fixture"
-    fixture_env = os.environ.copy()
-    fixture_env.pop("WAYLAND_DISPLAY", None)
-    fixture_env["XDG_SESSION_TYPE"] = "x11"
-    fixture_env["GDK_BACKEND"] = "x11"
-    fixture_env["GTK_MODULES"] = "gail:atk-bridge"
-    fixture = subprocess.Popen(
-        ["/usr/bin/python3", ACCESSIBILITY_FIXTURE],
-        env=fixture_env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = time.monotonic() + 3
-    fixture_window_id = None
-    while time.monotonic() < deadline:
-        found = subprocess.run(
-            ["xdotool", "search", "--onlyvisible", "--name", f"^{fixture_title}$"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        if found.returncode == 0 and found.stdout.strip():
-            fixture_window_id = found.stdout.splitlines()[0]
-            break
-        time.sleep(0.05)
-    else:
-        fixture.terminate()
-        fixture.wait(timeout=3)
-        raise AssertionError("live app-state fixture did not appear")
-    subprocess.run(
-        [
-            "xprop", "-id", fixture_window_id, "-f", "_NET_WM_PID", "32c",
-            "-set", "_NET_WM_PID", str(fixture.pid),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    subprocess.run(
-        ["xdotool", "windowactivate", "--sync", fixture_window_id],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(0.3)
+    baseline = desktop_state()
     existing_ids = {cursor["cursorId"] for cursor in raw_status()["cursors"]}
-    owner = DeskpalClient(name="indicator-live-owner")
-
-    def stable_app_state(extra=None):
-        arguments = {"windowName": fixture_title, **(extra or {})}
-        last = None
-        for _ in range(3):
-            subprocess.run(
-                ["xdotool", "windowactivate", "--sync", fixture_window_id],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
-            last = owner.tool("get_app_state", arguments)["appState"]
-            if "captureId" in last:
-                return last
-        raise AssertionError({"stableAppStateUnavailable": last})
-
+    owner = DeskpalClient(name="indicator-background-owner")
     peer = None
-    forced = None
-    owner_remote = None
-    forced_remote = None
+    remote_id = None
     try:
-        environment = json.loads(text(owner.tool("get_environment_status")))
-        assert environment["scope"] == "visible-desktop", environment
-        assert environment["capabilities"]["agentCursor"]["available"] is True, environment
-        assert environment["capabilities"]["semanticPress"]["available"] is True, environment
-        assert environment["capabilities"]["semanticSetText"]["available"] is True, environment
-        assert environment["capabilities"]["semanticSetValue"]["available"] is True, environment
-        assert environment["capabilities"]["semanticSelect"]["available"] is True, environment
-        assert environment["capabilities"]["semanticReplaceTextRange"]["available"] is True, environment
-        assert environment["capabilities"]["backgroundPixelInput"]["available"] is False, environment
-        blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
-        assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
-        assert "agent_cursor_unavailable" not in blocker_ids, environment
-
         status = json.loads(text(owner.tool("agent_cursor_status")))
         assert status["available"] is True, status
         assert len(status["monitors"]) == 1, status
-        monitor = status["monitors"][0]
-        assert (monitor["x"], monitor["y"]) == (0, 0), monitor
-        assert monitor["width"] == status["stageWidth"], status
-        assert monitor["height"] == status["stageHeight"], status
 
-        app_state_baseline = desktop_state()
-        app_state = stable_app_state({"maxWidth": 210, "maxHeight": 110})
-        app_state_result = {"appState": app_state}
-        assert app_state["target"]["processId"] == fixture.pid, app_state
-        assert app_state["focus"]["known"] is True, app_state
-        assert app_state["consistency"]["stable"] is True, app_state
-        assert app_state["semanticRevision"].startswith("fnv1a64-"), app_state
-        unchanged_diff_state = owner.tool(
-            "get_app_state",
+        capture = owner.tool(
+            "screenshot", {"fullScreen": True, "maxWidth": 960, "maxHeight": 540}
+        )
+        move_result = owner.tool(
+            "agent_cursor_move",
             {
-                "windowName": fixture_title,
-                "previousCaptureId": app_state["captureId"],
-            },
-        )["appState"]
-        assert unchanged_diff_state["semanticDiff"]["changed"] is False
-        assert unchanged_diff_state["semanticRevision"] == app_state["semanticRevision"]
-        image_x = app_state["image"]["imageWidth"] // 2
-        image_y = app_state["image"]["imageHeight"] // 2
-        app_move = move(
-            owner,
-            app_state_result,
-            image_x,
-            image_y,
-            "app-state-live",
-            "#22C55E",
-            "app-state-live",
-        )
-        expected_app_x = app_state["transform"]["offsetX"] + round(
-            image_x * app_state["transform"]["scaleX"]
-        )
-        expected_app_y = app_state["transform"]["offsetY"] + round(
-            image_y * app_state["transform"]["scaleY"]
-        )
-        assert app_move["stagePosition"] == {
-            "x": expected_app_x,
-            "y": expected_app_y,
-        }, app_move
-        app_hidden = json.loads(
-            text(owner.tool("agent_cursor_hide", {"cursorId": "app-state-live"}))
-        )
-        assert app_hidden["hidden"] is True, app_hidden
-        app_state_after = desktop_state()
-        for key, before_value in app_state_baseline.items():
-            # get_app_state already proves focus stability across its capture;
-            # GNOME may clear _NET_ACTIVE_WINDOW after the fixture activation.
-            if key == "focus":
-                continue
-            assert app_state_after[key] == before_value, {
-                "phase": "app-state cursor",
-                "changedState": key,
-                "before": before_value,
-                "after": app_state_after[key],
-            }
-
-        semantic_nodes = find_semantic_nodes(app_state["semantic"])
-        semantic_button = next(
-            node for node in semantic_nodes
-            if node.get("name") == "Apply validation message"
-        )
-        semantic_entry = next(
-            node for node in semantic_nodes
-            if node.get("name") == "Validation message"
-        )
-        semantic_checkbox = next(
-            node for node in semantic_nodes
-            if node.get("name") == "Approval checkbox"
-        )
-        semantic_expander = next(
-            node for node in semantic_nodes
-            if node.get("name") == "Advanced options"
-        )
-        semantic_volume = next(
-            node for node in semantic_nodes
-            if node.get("name") == "Volume value"
-        )
-        semantic_choice_list = next(
-            node for node in semantic_nodes
-            if node.get("name") == "Choice list"
-        )
-        press_baseline = desktop_state()
-        press_arguments = {
-            "captureId": app_state["captureId"],
-            "target": semantic_button["locator"],
-            "action": "click",
-            "verify": {
-                "role": "label",
-                "name": "Apply count",
-                "textEquals": "Apply count: 1",
-            },
-            "cursorId": "semantic-live",
-            "color": "#22C55E",
-            "label": "semantic press",
-        }
-        press_result = owner.tool("agent_semantic_press", press_arguments)
-        press = json.loads(text(press_result))
-        assert press.get("route") == "atspi", (press, press_result)
-        assert press["verified"] is True, press
-        assert press["indicatorMoved"] is True, press
-        assert press["actionApplied"] is True, press
-        assert press["inputDelivered"] is True, press
-        assert press["sharedPointerMoved"] is False, press
-        assert press["stackingKnown"] is True, press
-        assert press["stackingChanged"] is False, press
-        assert press["stackingChangeUnknown"] is False, press
-        assert press["stackingWindowCountBefore"] == (
-            press["stackingWindowCountAfter"]
-        ), press
-        assert press["clipboardChanged"] is False, press
-        assert press["action"]["verified"] is True, press
-        idempotent_press = json.loads(
-            text(owner.tool("agent_semantic_press", press_arguments))
-        )
-        assert idempotent_press["verified"] is True, idempotent_press
-        assert idempotent_press["actionApplied"] is False, idempotent_press
-        assert idempotent_press["inputDelivered"] is False, idempotent_press
-        duplicate_target = next(
-            node for node in find_semantic_nodes(app_state["semantic"])
-            if node.get("name") == "Duplicate action"
-        )
-        ambiguous_press_result = owner.tool(
-            "agent_semantic_press",
-            {
-                **press_arguments,
-                "target": duplicate_target["locator"],
-                "cursorId": "semantic-ambiguous",
+                "captureId": capture["screenshot"]["captureId"],
+                "x": 12,
+                "y": 12,
+                "cursorId": "background-check",
+                "color": "#36C5F0",
+                "label": "Deskpal check",
             },
         )
-        assert ambiguous_press_result.get("isError") is True, ambiguous_press_result
-        ambiguous_press = json.loads(text(ambiguous_press_result))
-        assert ambiguous_press["mutationIssued"] is False, ambiguous_press
-        assert ambiguous_press["inputDelivered"] is False, ambiguous_press
-        assert ambiguous_press["action"]["targetMatchCount"] == 2, ambiguous_press
-        owner.tool("agent_cursor_hide", {"cursorId": "semantic-ambiguous"})
-        set_text_arguments = {
-            "captureId": app_state["captureId"],
-            "target": semantic_entry["locator"],
-            "value": "semantic live value",
-            "cursorId": "semantic-text-live",
-            "color": "#8B5CF6",
-            "label": "semantic text",
-        }
-        set_text_result = owner.tool(
-            "agent_semantic_set_text", set_text_arguments
-        )
-        set_text_action = json.loads(text(set_text_result))
-        assert set_text_action["route"] == "atspi", set_text_action
-        assert set_text_action["operation"] == "setText", set_text_action
-        assert set_text_action["verified"] is True, set_text_action
-        assert set_text_action["actionApplied"] is True, set_text_action
-        assert set_text_action["inputDelivered"] is True, set_text_action
-        assert set_text_action["sharedPointerMoved"] is False, set_text_action
-        assert set_text_action["clipboardChanged"] is False, set_text_action
-        idempotent_text = json.loads(
-            text(owner.tool("agent_semantic_set_text", set_text_arguments))
-        )
-        assert idempotent_text["verified"] is True, idempotent_text
-        assert idempotent_text["actionApplied"] is False, idempotent_text
-        assert idempotent_text["inputDelivered"] is False, idempotent_text
-        owner.tool("agent_cursor_hide", {"cursorId": "semantic-text-live"})
-        range_arguments = {
-            "captureId": app_state["captureId"],
-            "target": semantic_entry["locator"],
-            "startOffset": 9,
-            "endOffset": 13,
-            "value": "range",
-            "cursorId": "semantic-range-live",
-            "color": "#A855F7",
-            "label": "semantic text range",
-        }
-        range_result = json.loads(
-            text(owner.tool("agent_semantic_replace_text_range", range_arguments))
-        )
-        assert range_result["operation"] == "replaceTextRange", range_result
-        assert range_result["verified"] is True, range_result
-        assert range_result["actionApplied"] is True, range_result
-        assert range_result["sharedPointerMoved"] is False, range_result
-        range_state = stable_app_state()
-        range_entry = next(
-            node for node in find_semantic_nodes(range_state["semantic"])
-            if node.get("name") == "Validation message"
-        )
-        idempotent_range = json.loads(
-            text(
-                owner.tool(
-                    "agent_semantic_replace_text_range",
-                    {
-                        **range_arguments,
-                        "captureId": range_state["captureId"],
-                        "target": range_entry["locator"],
-                        "endOffset": 14,
-                    },
-                )
-            )
-        )
-        assert idempotent_range["verified"] is True, idempotent_range
-        assert idempotent_range["actionApplied"] is False, idempotent_range
-        invalid_range = owner.tool(
-            "agent_semantic_replace_text_range",
-            {
-                **range_arguments,
-                "captureId": range_state["captureId"],
-                "target": range_entry["locator"],
-                "endOffset": 999,
-            },
-        )
-        assert invalid_range.get("isError") is True, invalid_range
-        invalid_range_payload = json.loads(text(invalid_range))
-        assert invalid_range_payload["mutationIssued"] is False
-        owner.tool("agent_cursor_hide", {"cursorId": "semantic-range-live"})
-        set_value_arguments = {
-            "captureId": app_state["captureId"],
-            "target": semantic_volume["locator"],
-            "value": 60,
-            "cursorId": "semantic-value-live",
-            "color": "#EC4899",
-            "label": "semantic value",
-        }
-        set_value_result = json.loads(
-            text(owner.tool("agent_semantic_set_value", set_value_arguments))
-        )
-        assert set_value_result["route"] == "atspi", set_value_result
-        assert set_value_result["operation"] == "setValue", set_value_result
-        assert set_value_result["verified"] is True, set_value_result
-        assert set_value_result["actionApplied"] is True, set_value_result
-        assert set_value_result["inputDelivered"] is True, set_value_result
-        assert set_value_result["action"]["verification"]["actualValue"] == 60
-        idempotent_value = json.loads(
-            text(owner.tool("agent_semantic_set_value", set_value_arguments))
-        )
-        assert idempotent_value["verified"] is True, idempotent_value
-        assert idempotent_value["actionApplied"] is False, idempotent_value
-        assert idempotent_value["inputDelivered"] is False, idempotent_value
-        invalid_value = owner.tool(
-            "agent_semantic_set_value",
-            {**set_value_arguments, "value": 101},
-        )
-        assert invalid_value.get("isError") is True, invalid_value
-        invalid_value_payload = json.loads(text(invalid_value))
-        assert invalid_value_payload["mutationIssued"] is False
-        assert invalid_value_payload["inputDelivered"] is False
-        owner.tool("agent_cursor_hide", {"cursorId": "semantic-value-live"})
-        selection_arguments = {
-            "captureId": app_state["captureId"],
-            "target": semantic_choice_list["locator"],
-            "value": 2,
-            "cursorId": "semantic-select-live",
-            "color": "#06B6D4",
-            "label": "semantic selection",
-        }
-        selection_result = json.loads(
-            text(owner.tool("agent_semantic_select", selection_arguments))
-        )
-        assert selection_result["route"] == "atspi", selection_result
-        assert selection_result["operation"] == "select", selection_result
-        assert selection_result["verified"] is True, selection_result
-        assert selection_result["actionApplied"] is True, selection_result
-        assert selection_result["inputDelivered"] is True, selection_result
-        assert selection_result["action"]["verification"]["actualSelected"] is True
-        idempotent_selection = json.loads(
-            text(owner.tool("agent_semantic_select", selection_arguments))
-        )
-        assert idempotent_selection["verified"] is True, idempotent_selection
-        assert idempotent_selection["actionApplied"] is False, idempotent_selection
-        invalid_selection = owner.tool(
-            "agent_semantic_select",
-            {**selection_arguments, "value": 3},
-        )
-        assert invalid_selection.get("isError") is True, invalid_selection
-        invalid_selection_payload = json.loads(text(invalid_selection))
-        assert invalid_selection_payload["mutationIssued"] is False
-        assert invalid_selection_payload["inputDelivered"] is False
-        owner.tool("agent_cursor_hide", {"cursorId": "semantic-select-live"})
-        toggle_arguments = {
-            "captureId": app_state["captureId"],
-            "target": semantic_checkbox["locator"],
-            "action": "click",
-            "verify": {
-                "role": "check box",
-                "name": "Approval checkbox",
-                "state": "checked",
-                "stateValue": True,
-            },
-            "cursorId": "semantic-toggle-live",
-            "color": "#F59E0B",
-            "label": "semantic toggle",
-        }
-        toggle_result = json.loads(
-            text(owner.tool("agent_semantic_press", toggle_arguments))
-        )
-        assert toggle_result["verified"] is True, toggle_result
-        assert toggle_result["actionApplied"] is True, toggle_result
-        assert toggle_result["inputDelivered"] is True, toggle_result
-        assert toggle_result["sharedPointerMoved"] is False, toggle_result
-        idempotent_toggle = json.loads(
-            text(owner.tool("agent_semantic_press", toggle_arguments))
-        )
-        assert idempotent_toggle["verified"] is True, idempotent_toggle
-        assert idempotent_toggle["actionApplied"] is False, idempotent_toggle
-        assert idempotent_toggle["inputDelivered"] is False, idempotent_toggle
-        owner.tool("agent_cursor_hide", {"cursorId": "semantic-toggle-live"})
-        expand_arguments = {
-            "captureId": app_state["captureId"],
-            "target": semantic_expander["locator"],
-            "action": semantic_expander["actions"][0],
-            "verify": {
-                "role": semantic_expander["role"],
-                "name": "Advanced options",
-                "state": "expanded",
-                "stateValue": True,
-            },
-            "cursorId": "semantic-expand-live",
-            "color": "#84CC16",
-            "label": "semantic expand",
-        }
-        expand_result = json.loads(
-            text(owner.tool("agent_semantic_press", expand_arguments))
-        )
-        assert expand_result["verified"] is True, expand_result
-        assert expand_result["actionApplied"] is True, expand_result
-        assert expand_result["sharedPointerMoved"] is False, expand_result
-        expanded_state = stable_app_state()
-        expanded_node = next(
-            node for node in find_semantic_nodes(expanded_state["semantic"])
-            if node.get("name") == "Advanced options"
-        )
-        idempotent_expand = json.loads(
-            text(
-                owner.tool(
-                    "agent_semantic_press",
-                    {
-                        **expand_arguments,
-                        "captureId": expanded_state["captureId"],
-                        "target": expanded_node["locator"],
-                    },
-                )
-            )
-        )
-        assert idempotent_expand["verified"] is True, idempotent_expand
-        assert idempotent_expand["actionApplied"] is False, idempotent_expand
-        owner.tool("agent_cursor_hide", {"cursorId": "semantic-expand-live"})
-        press_hidden = json.loads(
-            text(owner.tool("agent_cursor_hide", {"cursorId": "semantic-live"}))
-        )
-        assert press_hidden["hidden"] is True, press_hidden
-        press_after = desktop_state()
-        for key, before_value in press_baseline.items():
-            assert press_after[key] == before_value, {
-                "phase": "semantic press",
-                "changedState": key,
-                "before": before_value,
-                "after": press_after[key],
-            }
-        baseline = desktop_state()
+        moved = json.loads(text(move_result))
+        assert moved["verified"] is True, moved
+        assert moved["inputDelivered"] is False, moved
+        assert_unchanged(baseline, desktop_state())
 
-        full = owner.tool("screenshot", {"fullScreen": True})
-        full_meta = full["screenshot"]
-        assert (full_meta["imageWidth"], full_meta["imageHeight"]) == (
-            full_meta["sourceWidth"],
-            full_meta["sourceHeight"],
-        ), full_meta
-
-        top_left = move(
-            owner, full, 0, 0, "live-owner", "#36C5F0", "owner-a"
-        )
-        assert top_left["stagePosition"] == {"x": 0, "y": 0}, top_left
-        bottom_right = move(
-            owner,
-            full,
-            full_meta["imageWidth"] - 1,
-            full_meta["imageHeight"] - 1,
-            "live-owner",
-            "#36C5F0",
-            "owner-a",
-        )
-        edge = {"x": status["stageWidth"] - 1, "y": status["stageHeight"] - 1}
-        assert bottom_right["stagePosition"] == edge, bottom_right
-        assert bottom_right["cursor"]["renderedX"] == edge["x"], bottom_right
-        assert bottom_right["cursor"]["renderedY"] == edge["y"], bottom_right
-
-        restyled = move(
-            owner,
-            full,
-            full_meta["imageWidth"] // 2,
-            full_meta["imageHeight"] // 2,
-            "live-owner",
-            "#FF9F1C",
-            "owner-a-restyled",
-        )
-        assert restyled["created"] is False, restyled
-        assert restyled["cursor"]["color"] == "#FF9F1C", restyled
-        assert restyled["cursor"]["label"] == "owner-a-restyled", restyled
-
-        hidden = json.loads(
-            text(owner.tool("agent_cursor_hide", {"cursorId": "live-owner"}))
-        )
-        assert hidden["hidden"] is True and hidden["verified"] is True, hidden
-        downscaled = owner.tool(
-            "screenshot", {"fullScreen": True, "maxWidth": 1920, "maxHeight": 1080}
-        )
-        down_meta = downscaled["screenshot"]
-        image_x = down_meta["imageWidth"] // 3
-        image_y = down_meta["imageHeight"] // 3
-        down_move = move(
-            owner,
-            downscaled,
-            image_x,
-            image_y,
-            "live-owner",
-            "#36C5F0",
-            "owner-a-downscaled",
-        )
-        assert down_move["stagePosition"] == {
-            "x": round(image_x * status["stageWidth"] / down_meta["imageWidth"]),
-            "y": round(image_y * status["stageHeight"] / down_meta["imageHeight"]),
-        }, down_move
-
-        owner_remote = next(
+        remote_id = next(
             cursor["cursorId"]
             for cursor in raw_status()["cursors"]
-            if cursor["label"] == "owner-a-downscaled"
+            if cursor["label"] == "Deskpal check"
         )
-        assert owner_remote.startswith("dp-"), owner_remote
-
-        peer = DeskpalClient(name="indicator-live-peer")
+        peer = DeskpalClient(name="indicator-background-peer")
         peer_status = json.loads(text(peer.tool("agent_cursor_status")))
         assert peer_status["cursors"] == [], peer_status
         peer_hide = json.loads(
-            text(peer.tool("agent_cursor_hide", {"cursorId": "live-owner"}))
+            text(peer.tool("agent_cursor_hide", {"cursorId": "background-check"}))
         )
         assert peer_hide["hidden"] is False, peer_hide
-        denied = subprocess.check_output(
-            [
-                "gdbus",
-                "call",
-                "--session",
-                "--dest",
-                "org.deskpal.Indicator",
-                "--object-path",
-                "/org/deskpal/Indicator",
-                "--method",
-                "org.deskpal.Indicator.MoveCursorStyled",
-                owner_remote,
-                "700",
-                "700",
-                "#FF00FF",
-                "intruder",
-            ],
-            text=True,
-        ).strip()
-        assert denied == "(false,)", denied
-        owner_state = next(
-            cursor for cursor in raw_status()["cursors"]
-            if cursor["cursorId"] == owner_remote
+        assert any(
+            cursor["cursorId"] == remote_id for cursor in raw_status()["cursors"]
         )
-        assert owner_state["label"] == "owner-a-downscaled", owner_state
 
         peer.close()
         peer = None
-        owner.close()
+        owner.proc.kill()
+        owner.proc.wait(timeout=5)
         owner = None
-        wait_until_removed(owner_remote)
-
-        forced = DeskpalClient(name="indicator-live-forced-death")
-        forced_capture = forced.tool(
-            "screenshot", {"fullScreen": True, "maxWidth": 960}
-        )
-        move(
-            forced,
-            forced_capture,
-            300,
-            200,
-            "forced-death",
-            "#A855F7",
-            "forced-death",
-        )
-        forced_remote = next(
-            cursor["cursorId"]
-            for cursor in raw_status()["cursors"]
-            if cursor["label"] == "forced-death"
-        )
-        forced.proc.kill()
-        forced.proc.wait(timeout=5)
-        forced = None
-        wait_until_removed(forced_remote)
-
-        after = desktop_state()
-        for key, before_value in baseline.items():
-            # Focus is checked immediately around app-state cursor movement and
-            # semantic press above. GNOME may clear _NET_ACTIVE_WINDOW while
-            # this longer lifecycle test runs even without Deskpal input.
-            if key == "focus":
-                continue
-            assert after[key] == before_value, {
-                "changedState": key,
-                "before": before_value,
-                "after": after[key],
-            }
+        wait_until_removed(remote_id)
+        remote_id = None
+        assert_unchanged(baseline, desktop_state())
         remaining_ids = {cursor["cursorId"] for cursor in raw_status()["cursors"]}
         assert remaining_ids == existing_ids, (existing_ids, remaining_ids)
-        print("PASS: live capture mapping, style, isolation, death cleanup, and non-interference")
+        print("PASS: background indicator ownership, cleanup, and non-interference")
     finally:
         if peer is not None:
             try:
@@ -712,22 +148,11 @@ def run_suite():
                 owner.close()
             except Exception:
                 pass
-        if forced is not None and forced.proc.poll() is None:
-            forced.proc.kill()
-            forced.proc.wait(timeout=5)
-        for remote_id in (owner_remote, forced_remote):
-            if remote_id:
-                try:
-                    wait_until_removed(remote_id)
-                except Exception:
-                    pass
-        if fixture.poll() is None:
-            fixture.terminate()
+        if remote_id:
             try:
-                fixture.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                fixture.kill()
-                fixture.wait(timeout=3)
+                wait_until_removed(remote_id)
+            except Exception:
+                pass
 
 
 def main():

@@ -27,6 +27,7 @@
     "test:safe": "python3 test/indicator_contract.py && python3 test/e2e_isolation.py && python3 test/e2e_computer_use.py && python3 test/e2e_accessibility.py",
     "test:indicator": "python3 test/indicator_contract.py",
     "test:indicator-live": "python3 test/e2e_indicator_live.py",
+    "test:semantic-visible": "python3 test/e2e_semantic_visible.py",
     "indicator:install": "scripts/indicator.sh install",
     "indicator:demo": "scripts/indicator.sh demo",
     "indicator:clear": "scripts/indicator.sh clear",

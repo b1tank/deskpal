@@ -73,19 +73,27 @@ Close important work first.
 ```bash
 npm run test:desktop
 npm run test:sysmon
-npm run test:indicator-live
-# or all live suites
+npm run test:indicator-live       # short; does not launch or focus an app
+npm run test:semantic-visible     # explicitly disruptive full semantic acceptance
+# aggregate legacy app tests plus the short indicator check (not semantic-visible)
 npm run test:live
 ```
 
 They require a real X11/Xwayland display, `/dev/uinput` access for full input
-coverage, and the named applications. `test:indicator-live` additionally
-requires the installed GNOME extension and verifies full/downscaled capture
-mapping, edge placement, restyling, capture-bound verified semantic press,
-whole/range text replacement, numeric value mutation, direct-child selection,
-and expandable controls, cross-process isolation, graceful
-and forced-death cleanup, and
-pointer/focus/stacking/clipboard non-interference.
+coverage, and the named applications.
+
+`test:indicator-live` is intentionally short and background-friendly. It never
+launches, focuses, raises, or resizes an application. It places one logical
+cursor near the screen corner, verifies process ownership and forced-death
+cleanup, and checks pointer/focus/stacking/clipboard non-interference. A small
+overlay may be visible briefly.
+
+`test:semantic-visible` is the former comprehensive indicator/semantic suite.
+It launches and activates a GTK fixture and verifies full/downscaled mapping,
+edge placement, restyling, semantic press/toggle/expand, whole/range text,
+numeric value, selection, cross-process isolation, and lifecycle cleanup. Run
+it only for semantic milestone acceptance or final pre-release validation with
+explicit user approval. It is deliberately excluded from `test:live`.
 Screenshot artifacts go under `/tmp`.
 Capability-dependent cases print `BLOCK` when the visible surface is native
 Wayland and therefore outside the current backend; blocked is not counted as
