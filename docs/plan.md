@@ -127,9 +127,10 @@ broker actions will drive.
         GTK4 fixture probes currently fail, and no disruptive fallback is allowed.
   - [ ] Identify a trustworthy menu tree; GTK3 popover items remain non-showing
         with invalid bounds after the menu button reports open.
-- [ ] Test an explicit, user-approved session accessibility setup that lets
-      already-running Chromium/Electron apps expose rich AT-SPI trees. Never
-      change the setting silently.
+- [x] Test an explicit, user-approved session accessibility setup that lets
+      Chromium/Electron apps expose rich AT-SPI trees; see
+      [chromium-accessibility.md](chromium-accessibility.md). Never change the
+      setting silently.
 - [ ] Add accessibility events, stable signatures, element diffs, frame-settle
       detection, and capture-bound pixel verification.
 - [ ] Add `backgroundOnly` and `foregroundAllowed` delivery policy plus

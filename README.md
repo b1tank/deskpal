@@ -185,7 +185,9 @@ For accessible controls, `deskpal_agent_semantic_press`,
 logical-cursor motion, verified AT-SPI mutation, and an explicit postcondition
 without shared-pointer, keyboard, or clipboard fallback; see
 [docs/semantic-actions.md](docs/semantic-actions.md) for its contract and
-limitations.
+limitations. Chromium/Electron session setup evidence and its native-Wayland
+boundary are documented in
+[docs/chromium-accessibility.md](docs/chromium-accessibility.md).
 
 ### Goal-aware isolation
 
