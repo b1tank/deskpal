@@ -32,7 +32,10 @@ The caller supplies:
   before dispatch, performs one AT-SPI set operation to avoid partial
   delete/insert outcomes, and verifies the exact result without echoing the
   observed or derived full text. Text beyond the
-  bounded 4096-character read/offset limit is rejected.
+  bounded 4096-character read/offset limit is rejected. Because the safe atomic
+  implementation writes one resulting plain-text value, it does not preserve
+  rich-text spans, caret position, or selection; rich-text editors are not yet
+  supported by this route.
 
 Deskpal revalidates the captured X11 identity and geometry, refreshes the exact
 AT-SPI window, filters it to the captured PID, re-resolves the complete locator,
