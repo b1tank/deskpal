@@ -432,6 +432,52 @@ int x11_resize_window(unsigned long wid, int width, int height)
 	return xdo_set_window_size(g_xdo, (Window)wid, width, height, 0);
 }
 
+int x11_get_stacking_snapshot(X11StackingSnapshot *snapshot)
+{
+	if (!snapshot) return -1;
+	memset(snapshot, 0, sizeof(*snapshot));
+	Display *display = g_xdo->xdpy;
+	Window root = DefaultRootWindow(display);
+	Atom property = XInternAtom(display, "_NET_CLIENT_LIST_STACKING", True);
+	if (property == None) return -1;
+	Atom actual_type = None;
+	int actual_format = 0;
+	unsigned long item_count = 0;
+	unsigned long bytes_after = 0;
+	unsigned char *data = NULL;
+	int status = XGetWindowProperty(display, root, property, 0, ~0L, False,
+	                                XA_WINDOW, &actual_type, &actual_format,
+	                                &item_count, &bytes_after, &data);
+	if (status != Success || actual_type != XA_WINDOW || actual_format != 32 ||
+	    bytes_after != 0 || (item_count > 0 && !data)) {
+		if (data) XFree(data);
+		return -1;
+	}
+	if (item_count > 0) {
+		snapshot->window_ids = malloc(sizeof(unsigned long) * item_count);
+		if (!snapshot->window_ids) { XFree(data); return -1; }
+		memcpy(snapshot->window_ids, data, sizeof(unsigned long) * item_count);
+	}
+	snapshot->count = item_count;
+	if (data) XFree(data);
+	return 0;
+}
+
+void x11_free_stacking_snapshot(X11StackingSnapshot *snapshot)
+{
+	if (!snapshot) return;
+	free(snapshot->window_ids);
+	memset(snapshot, 0, sizeof(*snapshot));
+}
+
+int x11_stacking_snapshots_equal(const X11StackingSnapshot *left,
+                                 const X11StackingSnapshot *right)
+{
+	return left && right && left->count == right->count &&
+	       (left->count == 0 || memcmp(left->window_ids, right->window_ids,
+	                                   left->count * sizeof(unsigned long)) == 0);
+}
+
 unsigned long x11_get_active_window(void)
 {
 	Window wid = 0;

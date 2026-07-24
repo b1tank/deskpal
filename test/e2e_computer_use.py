@@ -694,6 +694,8 @@ def run_suite():
                 },
             )["appState"]
             assert other_target["semanticDiff"]["sameTarget"] is False
+            assert other_target["semanticDiff"]["comparable"] is False
+            assert other_target["semanticDiff"]["reason"] == "different_target"
             assert other_target["semanticDiff"]["changed"] is False
             duplicate_fixture.terminate()
             duplicate_fixture.wait(timeout=3)

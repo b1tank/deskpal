@@ -214,11 +214,32 @@ def run_rich_suite(env):
         )["appState"]
         unchanged_diff = unchanged_state["semanticDiff"]
         assert unchanged_diff["sameTarget"] is True, unchanged_diff
+        assert unchanged_diff["comparable"] is True, unchanged_diff
+        assert unchanged_diff["baseProjectionComplete"] is True, unchanged_diff
+        assert unchanged_diff["currentProjectionComplete"] is True, unchanged_diff
         assert unchanged_diff["changed"] is False, unchanged_diff
         assert unchanged_diff["added"] == [], unchanged_diff
         assert unchanged_diff["removed"] == [], unchanged_diff
         assert unchanged_diff["updated"] == [], unchanged_diff
         assert unchanged_diff["baseRevision"] == unchanged_diff["currentRevision"]
+        incomplete_base = client.tool(
+            "get_app_state",
+            {"windowName": TITLE, "semanticMaxNodes": 1},
+        )["appState"]
+        assert incomplete_base["semanticProjectionTruncated"] is True
+        incomplete_diff_state = client.tool(
+            "get_app_state",
+            {
+                "windowName": TITLE,
+                "previousCaptureId": incomplete_base["captureId"],
+            },
+        )["appState"]
+        incomplete_diff = incomplete_diff_state["semanticDiff"]
+        assert incomplete_diff["comparable"] is False, incomplete_diff
+        assert incomplete_diff["reason"] == "base_or_current_projection_incomplete"
+        assert "added" not in incomplete_diff, incomplete_diff
+        assert "removed" not in incomplete_diff, incomplete_diff
+        assert "updated" not in incomplete_diff, incomplete_diff
         semantic_state = app_state["semantic"]
         assert semantic_state["available"] is True, semantic_state
         assert semantic_state["exactScope"] is True, semantic_state
@@ -853,6 +874,7 @@ def run_rich_suite(env):
         )["appState"]
         changed_diff = changed_state["semanticDiff"]
         assert changed_diff["sameTarget"] is True, changed_diff
+        assert changed_diff["comparable"] is True, changed_diff
         assert changed_diff["changed"] is True, changed_diff
         changed_fields = {
             field

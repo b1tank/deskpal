@@ -47,8 +47,10 @@ before mutation. The requested postcondition is always verified.
 
 The result reports the `atspi` route, operation, cursor result, semantic target
 and transform, underlying action result, mutation and verification state, and
-whether focus changed. `sharedPointerMoved` and `clipboardChanged` are always
-false for these routes.
+whether focus or X11 stacking changed. `sharedPointerMoved` and
+`clipboardChanged` are always false for these routes. Stacking is compared as
+exact before/after `_NET_CLIENT_LIST_STACKING` order when the window manager
+publishes a complete snapshot; otherwise it remains explicitly unknown.
 Unknown action outcomes are returned as unknown and are never retried blindly.
 
 ## Transform verification
@@ -77,8 +79,9 @@ application mutation.
   internal control can still relayout between the fresh semantic read and the
   invoke. Postcondition verification detects action failure; accessibility
   events/frame diffs are planned to tighten this interval further.
-- Focus changes are measured when X11 focus is knowable. Stacking changes are
-  currently reported as unknown rather than falsely claimed unchanged.
+- Focus changes are measured when X11 focus is knowable. Stacking preservation
+  is proven only when complete before/after EWMH lists are available; otherwise
+  `stackingKnown` is false and `stackingChanged` remains null.
 - These first slices implement invoke/press, verified checkbox toggles through
   press, whole-value text replacement, numeric/range value mutation, and direct
   child selection, Unicode text-range replacement, and expandable controls

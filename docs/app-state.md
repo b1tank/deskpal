@@ -63,8 +63,10 @@ enter the revision or diff, even when separately returned by explicit opt-in.
 Revisions are non-cryptographic FNV-1a equality hints only. They are not
 security digests or authorization tokens and never replace fresh complete-
 locator resolution before mutation. Diff lists are
-bounded; `truncated: true` means callers must re-observe rather than assuming
-unreported elements were unchanged.
+bounded. A diff is `comparable: true` only when both retained projections are
+complete. Otherwise it returns
+`reason: base_or_current_projection_incomplete` and omits added/removed/updated
+lists; callers must re-observe rather than treating omitted nodes as removals.
 
 ## Freshness and failure rules
 

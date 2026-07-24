@@ -9,8 +9,14 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /* ── Types ────────────────────────────────────────────────────────────────── */
+
+typedef struct {
+	unsigned long *window_ids;
+	size_t count;
+} X11StackingSnapshot;
 
 typedef struct {
 	unsigned long id;
@@ -59,6 +65,13 @@ int x11_resize_window(unsigned long wid, int width, int height);
 
 /* Get the active window ID. */
 unsigned long x11_get_active_window(void);
+
+/* Snapshot the exact EWMH stacking order. Returns -1 when unavailable or
+ * incomplete. The caller must release successful snapshots. */
+int x11_get_stacking_snapshot(X11StackingSnapshot *snapshot);
+void x11_free_stacking_snapshot(X11StackingSnapshot *snapshot);
+int x11_stacking_snapshots_equal(const X11StackingSnapshot *left,
+                                 const X11StackingSnapshot *right);
 
 /* ── Input ────────────────────────────────────────────────────────────────── */
 

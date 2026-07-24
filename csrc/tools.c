@@ -837,13 +837,24 @@ static cJSON *semantic_diff(const DeskpalCapture *base,
 	cJSON *diff = cJSON_CreateObject();
 	cJSON_AddStringToObject(diff, "baseCaptureId", base->id);
 	cJSON_AddBoolToObject(diff, "sameTarget", 1);
+	cJSON_AddBoolToObject(diff, "baseProjectionComplete", base->semantic_complete);
+	cJSON_AddBoolToObject(diff, "currentProjectionComplete", !projection_truncated);
+	if (!base->semantic_complete || projection_truncated) {
+		cJSON_AddBoolToObject(diff, "comparable", 0);
+		cJSON_AddStringToObject(diff, "reason",
+		                      "base_or_current_projection_incomplete");
+		cJSON_AddBoolToObject(diff, "changed", 0);
+		cJSON_AddBoolToObject(diff, "truncated", 1);
+		return diff;
+	}
+	cJSON_AddBoolToObject(diff, "comparable", 1);
 	cJSON *added = cJSON_CreateArray();
 	cJSON *removed = cJSON_CreateArray();
 	cJSON *updated = cJSON_CreateArray();
 	cJSON_AddItemToObject(diff, "added", added);
 	cJSON_AddItemToObject(diff, "removed", removed);
 	cJSON_AddItemToObject(diff, "updated", updated);
-	int truncated = projection_truncated;
+	int truncated = 0;
 	cJSON *base_records = cJSON_Parse(base->semantic_snapshot);
 	if (!cJSON_IsArray(base_records)) {
 		cJSON_Delete(base_records);
@@ -1076,6 +1087,8 @@ cJSON *tool_get_app_state(const cJSON *params)
 			diff = cJSON_CreateObject();
 			cJSON_AddStringToObject(diff, "baseCaptureId", previous_capture.id);
 			cJSON_AddBoolToObject(diff, "sameTarget", 0);
+			cJSON_AddBoolToObject(diff, "comparable", 0);
+			cJSON_AddStringToObject(diff, "reason", "different_target");
 			cJSON_AddBoolToObject(diff, "changed", 0);
 			cJSON_AddBoolToObject(diff, "truncated", 0);
 		} else if (!stable) {
@@ -1083,6 +1096,8 @@ cJSON *tool_get_app_state(const cJSON *params)
 			cJSON_AddStringToObject(diff, "baseCaptureId", previous_capture.id);
 			cJSON_AddBoolToObject(diff, "sameTarget", 1);
 			cJSON_AddBoolToObject(diff, "currentStable", 0);
+			cJSON_AddBoolToObject(diff, "comparable", 0);
+			cJSON_AddStringToObject(diff, "reason", "current_observation_unstable");
 			cJSON_AddBoolToObject(diff, "changed", 0);
 			cJSON_AddBoolToObject(diff, "truncated", 0);
 		} else {
@@ -1112,7 +1127,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 	                                   image.source_width, image.source_height,
 	                                   image.image_width, image.image_height,
 	                                   semantic_revision, semantic_snapshot,
-	                                   &capture) != 0) {
+	                                   !projection_truncated, &capture) != 0) {
 		free(image.png);
 		free(semantic_snapshot);
 		cJSON_Delete(diff);
@@ -1818,10 +1833,18 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params,
 	}
 	cJSON_AddNumberToObject(action_params, "timeoutMs", timeout_ms);
 	unsigned long focus_before = x11_get_active_window();
+	X11StackingSnapshot stacking_before = {0};
+	X11StackingSnapshot stacking_after = {0};
+	int stacking_before_known =
+		x11_get_stacking_snapshot(&stacking_before) == 0;
 	cJSON *action_result = accessibility_action(action_params);
+	int stacking_after_known =
+		x11_get_stacking_snapshot(&stacking_after) == 0;
 	unsigned long focus_after = x11_get_active_window();
 	cJSON_Delete(action_params);
 	if (!action_result) {
+		x11_free_stacking_snapshot(&stacking_before);
+		x11_free_stacking_snapshot(&stacking_after);
 		cJSON_Delete(indicator_result);
 		cJSON_Delete(semantic);
 		cJSON_Delete(transform);
@@ -1852,8 +1875,20 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params,
 		cJSON_AddBoolToObject(payload, "focusChanged", focus_before != focus_after);
 	else
 		cJSON_AddNullToObject(payload, "focusChanged");
-	cJSON_AddNullToObject(payload, "stackingChanged");
-	cJSON_AddBoolToObject(payload, "stackingChangeUnknown", 1);
+	int stacking_known = stacking_before_known && stacking_after_known;
+	cJSON_AddBoolToObject(payload, "stackingKnown", stacking_known);
+	if (stacking_known) {
+		cJSON_AddBoolToObject(payload, "stackingChanged",
+		                     !x11_stacking_snapshots_equal(
+			                     &stacking_before, &stacking_after));
+		cJSON_AddNumberToObject(payload, "stackingWindowCountBefore",
+		                       (double)stacking_before.count);
+		cJSON_AddNumberToObject(payload, "stackingWindowCountAfter",
+		                       (double)stacking_after.count);
+	} else {
+		cJSON_AddNullToObject(payload, "stackingChanged");
+	}
+	cJSON_AddBoolToObject(payload, "stackingChangeUnknown", !stacking_known);
 	cJSON_AddBoolToObject(payload, "clipboardChanged", 0);
 	cJSON_AddItemToObject(payload, "indicator", indicator_result);
 	cJSON_AddItemToObject(payload, "semanticTransform", transform);
@@ -1861,6 +1896,8 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params,
 	cJSON_AddItemToObject(payload, "action", action_result);
 	int verified = cJSON_IsTrue(cJSON_GetObjectItem(action_result, "verified"));
 	cJSON_AddBoolToObject(payload, "verified", verified);
+	x11_free_stacking_snapshot(&stacking_before);
+	x11_free_stacking_snapshot(&stacking_after);
 	cJSON_Delete(semantic);
 	cJSON *result = structured_text_result(payload, result_key);
 	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);

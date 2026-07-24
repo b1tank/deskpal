@@ -79,6 +79,7 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int image_width, int image_height,
                           const char *semantic_revision,
                           const char *semantic_snapshot,
+                          int semantic_complete,
                           DeskpalCapture *capture)
 {
 	if (window_id == 0 || process_id <= 0 || !title || !title[0] ||
@@ -112,6 +113,7 @@ int captures_store_window(unsigned long window_id, long process_id,
 		return -1;
 	}
 	next.semantic_snapshot = snapshot_copy;
+	next.semantic_complete = semantic_complete;
 	if (store_capture(&next, capture) != 0) {
 		free(snapshot_copy);
 		return -1;

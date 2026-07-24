@@ -137,6 +137,9 @@ broker actions will drive.
       detection, and capture-bound pixel verification.
   - [x] Ship privacy-safe semantic revisions and bounded same-target element
         diffs through `get_app_state(previousCaptureId)`.
+  - [x] Fail semantic diffs closed when either projection is incomplete.
+  - [x] Compare exact EWMH stacking order around semantic mutations when the
+        window manager exposes complete before/after snapshots.
 - [ ] Add `backgroundOnly` and `foregroundAllowed` delivery policy plus
       structured `backgroundUnavailable` errors.
 - [ ] Add per-app capability policy, untrusted-content marking, high-impact

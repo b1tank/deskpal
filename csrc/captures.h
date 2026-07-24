@@ -34,6 +34,7 @@ typedef struct {
 	int image_height;
 	char semantic_revision[DESKPAL_SEMANTIC_REVISION_LEN];
 	const char *semantic_snapshot;
+	int semantic_complete;
 	int64_t created_monotonic_ms;
 } DeskpalCapture;
 
@@ -51,6 +52,7 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int image_width, int image_height,
                           const char *semantic_revision,
                           const char *semantic_snapshot,
+                          int semantic_complete,
                           DeskpalCapture *capture);
 
 /* Resolve an ID from this process's bounded history. Returns -2 if expired. */
