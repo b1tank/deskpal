@@ -135,6 +135,8 @@ broker actions will drive.
         exact X11 identity, stable capture ID, and a verified 2x semantic transform.
 - [ ] Add accessibility events, stable signatures, element diffs, frame-settle
       detection, and capture-bound pixel verification.
+  - [x] Ship privacy-safe semantic revisions and bounded same-target element
+        diffs through `get_app_state(previousCaptureId)`.
 - [ ] Add `backgroundOnly` and `foregroundAllowed` delivery policy plus
       structured `backgroundUnavailable` errors.
 - [ ] Add per-app capability policy, untrusted-content marking, high-impact

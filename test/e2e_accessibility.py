@@ -206,6 +206,19 @@ def run_rich_suite(env):
         assert app_state["target"]["processId"] == fixture.pid, app_state
         assert app_state["consistency"]["stable"] is True, app_state
         assert app_state["captureId"].startswith("capture-"), app_state
+        assert app_state["semanticRevision"].startswith("fnv1a64-"), app_state
+        assert app_state["semanticProjectionTruncated"] is False, app_state
+        unchanged_state = client.tool(
+            "get_app_state",
+            {"windowName": TITLE, "previousCaptureId": app_state["captureId"]},
+        )["appState"]
+        unchanged_diff = unchanged_state["semanticDiff"]
+        assert unchanged_diff["sameTarget"] is True, unchanged_diff
+        assert unchanged_diff["changed"] is False, unchanged_diff
+        assert unchanged_diff["added"] == [], unchanged_diff
+        assert unchanged_diff["removed"] == [], unchanged_diff
+        assert unchanged_diff["updated"] == [], unchanged_diff
+        assert unchanged_diff["baseRevision"] == unchanged_diff["currentRevision"]
         semantic_state = app_state["semantic"]
         assert semantic_state["available"] is True, semantic_state
         assert semantic_state["exactScope"] is True, semantic_state
@@ -602,6 +615,20 @@ def run_rich_suite(env):
             },
         )
         assert accessibility_payload(restore_text_result)["verified"] is True
+        privacy_diff_state = client.tool(
+            "get_app_state",
+            {
+                "windowName": TITLE,
+                "previousCaptureId": app_state["captureId"],
+                "includeText": True,
+                "includeAttributes": True,
+            },
+        )["appState"]
+        assert privacy_diff_state["semanticRevision"] == app_state["semanticRevision"]
+        assert privacy_diff_state["semanticDiff"]["changed"] is False
+        assert "semantic action value" not in json.dumps(
+            privacy_diff_state["semanticDiff"]
+        )
 
         set_value_result = client.tool(
             "accessibility_action",
@@ -820,6 +847,26 @@ def run_rich_suite(env):
         )
         assert idempotent_expand["verified"] is True, idempotent_expand
         assert idempotent_expand["actionApplied"] is False, idempotent_expand
+        changed_state = client.tool(
+            "get_app_state",
+            {"windowName": TITLE, "previousCaptureId": app_state["captureId"]},
+        )["appState"]
+        changed_diff = changed_state["semanticDiff"]
+        assert changed_diff["sameTarget"] is True, changed_diff
+        assert changed_diff["changed"] is True, changed_diff
+        changed_fields = {
+            field
+            for update in changed_diff["updated"]
+            for field in update["changedFields"]
+        }
+        assert {"states", "bounds", "value", "selection"}.issubset(
+            changed_fields
+        ), changed_diff
+        assert changed_diff["truncated"] is False, changed_diff
+        diff_wire = json.dumps(changed_diff)
+        assert "Validation message" not in diff_wire, changed_diff
+        assert "semantic action value" not in diff_wire, changed_diff
+        assert "placeholder-text" not in diff_wire, changed_diff
 
         failed_verification_result = client.tool(
             "accessibility_action",

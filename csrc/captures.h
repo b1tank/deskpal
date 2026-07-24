@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #define DESKPAL_CAPTURE_ID_LEN 64
+#define DESKPAL_SEMANTIC_REVISION_LEN 32
 
 typedef enum {
 	DESKPAL_CAPTURE_DESKTOP = 1,
@@ -31,6 +32,8 @@ typedef struct {
 	int source_height;
 	int image_width;
 	int image_height;
+	char semantic_revision[DESKPAL_SEMANTIC_REVISION_LEN];
+	const char *semantic_snapshot;
 	int64_t created_monotonic_ms;
 } DeskpalCapture;
 
@@ -46,6 +49,8 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int window_width, int window_height,
                           int source_width, int source_height,
                           int image_width, int image_height,
+                          const char *semantic_revision,
+                          const char *semantic_snapshot,
                           DeskpalCapture *capture);
 
 /* Resolve an ID from this process's bounded history. Returns -2 if expired. */

@@ -54,12 +54,18 @@ def publish_clients():
     clients = (ctypes.c_ulong * 2)(client_window(root), client_window(second))
     root_window = lib.XDefaultRootWindow(display)
     client_list = lib.XInternAtom(display, b"_NET_CLIENT_LIST", 0)
+    active_window = lib.XInternAtom(display, b"_NET_ACTIVE_WINDOW", 0)
     window_atom = lib.XInternAtom(display, b"WINDOW", 0)
     pid_atom = lib.XInternAtom(display, b"_NET_WM_PID", 0)
     cardinal_atom = lib.XInternAtom(display, b"CARDINAL", 0)
     process_id = ctypes.c_ulong(os.getpid())
     lib.XChangeProperty(
         display, root_window, client_list, window_atom, 32, 0, clients, 2,
+    )
+    active_client = ctypes.c_ulong(clients[0])
+    lib.XChangeProperty(
+        display, root_window, active_window, window_atom, 32, 0,
+        ctypes.byref(active_client), 1,
     )
     for client in clients:
         lib.XChangeProperty(

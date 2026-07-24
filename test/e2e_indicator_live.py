@@ -45,6 +45,14 @@ def command_output(*args):
     return subprocess.check_output(args)
 
 
+def pointer_coordinates():
+    output = command_output("xdotool", "getmouselocation", "--shell")
+    return b"\n".join(
+        line for line in output.splitlines()
+        if line.startswith((b"X=", b"Y=", b"SCREEN="))
+    )
+
+
 def desktop_state():
     clipboard = subprocess.run(
         ["xclip", "-selection", "clipboard", "-o"],
@@ -53,7 +61,7 @@ def desktop_state():
         check=False,
     ).stdout
     return {
-        "pointer": command_output("xdotool", "getmouselocation", "--shell"),
+        "pointer": pointer_coordinates(),
         "focus": command_output("xprop", "-root", "_NET_ACTIVE_WINDOW"),
         "stacking": command_output("xprop", "-root", "_NET_CLIENT_LIST_STACKING"),
         "clipboard": clipboard,
@@ -151,6 +159,22 @@ def run_suite():
     time.sleep(0.3)
     existing_ids = {cursor["cursorId"] for cursor in raw_status()["cursors"]}
     owner = DeskpalClient(name="indicator-live-owner")
+
+    def stable_app_state(extra=None):
+        arguments = {"windowName": fixture_title, **(extra or {})}
+        last = None
+        for _ in range(3):
+            subprocess.run(
+                ["xdotool", "windowactivate", "--sync", fixture_window_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+            last = owner.tool("get_app_state", arguments)["appState"]
+            if "captureId" in last:
+                return last
+        raise AssertionError({"stableAppStateUnavailable": last})
+
     peer = None
     forced = None
     owner_remote = None
@@ -178,14 +202,21 @@ def run_suite():
         assert monitor["height"] == status["stageHeight"], status
 
         app_state_baseline = desktop_state()
-        app_state_result = owner.tool(
-            "get_app_state",
-            {"windowName": fixture_title, "maxWidth": 210, "maxHeight": 110},
-        )
-        app_state = app_state_result["appState"]
+        app_state = stable_app_state({"maxWidth": 210, "maxHeight": 110})
+        app_state_result = {"appState": app_state}
         assert app_state["target"]["processId"] == fixture.pid, app_state
         assert app_state["focus"]["known"] is True, app_state
         assert app_state["consistency"]["stable"] is True, app_state
+        assert app_state["semanticRevision"].startswith("fnv1a64-"), app_state
+        unchanged_diff_state = owner.tool(
+            "get_app_state",
+            {
+                "windowName": fixture_title,
+                "previousCaptureId": app_state["captureId"],
+            },
+        )["appState"]
+        assert unchanged_diff_state["semanticDiff"]["changed"] is False
+        assert unchanged_diff_state["semanticRevision"] == app_state["semanticRevision"]
         image_x = app_state["image"]["imageWidth"] // 2
         image_y = app_state["image"]["imageHeight"] // 2
         app_move = move(
@@ -338,10 +369,7 @@ def run_suite():
         assert range_result["verified"] is True, range_result
         assert range_result["actionApplied"] is True, range_result
         assert range_result["sharedPointerMoved"] is False, range_result
-        range_state_result = owner.tool(
-            "get_app_state", {"windowName": fixture_title}
-        )
-        range_state = range_state_result["appState"]
+        range_state = stable_app_state()
         range_entry = next(
             node for node in find_semantic_nodes(range_state["semantic"])
             if node.get("name") == "Validation message"
@@ -485,10 +513,7 @@ def run_suite():
         assert expand_result["verified"] is True, expand_result
         assert expand_result["actionApplied"] is True, expand_result
         assert expand_result["sharedPointerMoved"] is False, expand_result
-        expanded_state_result = owner.tool(
-            "get_app_state", {"windowName": fixture_title}
-        )
-        expanded_state = expanded_state_result["appState"]
+        expanded_state = stable_app_state()
         expanded_node = next(
             node for node in find_semantic_nodes(expanded_state["semantic"])
             if node.get("name") == "Advanced options"

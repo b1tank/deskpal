@@ -102,6 +102,7 @@ def run_suite():
             assert cursor_move_schema["properties"]["x"]["type"] == "integer"
             assert "sessionId" in environment_schema["properties"]
             assert app_state_schema["properties"]["maxWidth"]["default"] == 1920
+            assert app_state_schema["properties"]["includeOffscreen"]["default"] is False
             assert app_state_schema["properties"]["includeText"]["default"] is False
 
             environment = json.loads(text(client.tool("get_environment_status")))
@@ -298,6 +299,24 @@ def run_suite():
             ):
                 invalid_state = client.tool("get_app_state", invalid_target)
                 assert invalid_state.get("isError") is True, invalid_state
+            unknown_previous = client.tool(
+                "get_app_state",
+                {"windowName": TITLE, "previousCaptureId": "capture-unknown"},
+            )
+            assert unknown_previous.get("isError") is True, unknown_previous
+            assert unknown_previous["appStateError"]["code"] == (
+                "previous_capture_unknown"
+            )
+            for _ in range(17):
+                client.tool("screenshot", {"fullScreen": True, "maxWidth": 64})
+            evicted_previous = client.tool(
+                "get_app_state",
+                {"windowName": TITLE, "previousCaptureId": app_state["captureId"]},
+            )
+            assert evicted_previous.get("isError") is True, evicted_previous
+            assert evicted_previous["appStateError"]["code"] == (
+                "previous_capture_unknown"
+            )
             for unavailable_name in ("Computer Use", TITLE.lower()):
                 unsupported_state = client.tool(
                     "get_app_state", {"windowName": unavailable_name}
@@ -320,6 +339,17 @@ def run_suite():
             assert capture_metadata["captureTarget"] == "desktop", capture_metadata
             assert capture_metadata["captureCoordinateSpace"] == "image-pixels", capture_metadata
             assert capture_metadata["captureId"] in text(desktop_capture, 1), desktop_capture
+            desktop_diff_base = client.tool(
+                "get_app_state",
+                {
+                    "windowName": TITLE,
+                    "previousCaptureId": capture_metadata["captureId"],
+                },
+            )
+            assert desktop_diff_base.get("isError") is True, desktop_diff_base
+            assert desktop_diff_base["appStateError"]["code"] == (
+                "previous_capture_not_app_state"
+            )
             unavailable_move = client.tool(
                 "agent_cursor_move",
                 {"captureId": capture_metadata["captureId"], "x": 320, "y": 200},
@@ -646,6 +676,25 @@ def run_suite():
             assert ambiguous_state is not None, ambiguous_state
             assert ambiguous_state.get("isError") is True, ambiguous_state
             assert ambiguous_state["appStateError"]["code"] == "target_ambiguous"
+            duplicate_ids = subprocess.check_output(
+                ["xdotool", "search", "--onlyvisible", "--name", f"^{DUPLICATE_TITLE}$"],
+                env=env,
+                text=True,
+            ).splitlines()
+            assert len(set(duplicate_ids)) == 2, duplicate_ids
+            duplicate_ids = list(dict.fromkeys(duplicate_ids))
+            first_duplicate = client.tool(
+                "get_app_state", {"windowId": duplicate_ids[0]}
+            )["appState"]
+            other_target = client.tool(
+                "get_app_state",
+                {
+                    "windowId": duplicate_ids[1],
+                    "previousCaptureId": first_duplicate["captureId"],
+                },
+            )["appState"]
+            assert other_target["semanticDiff"]["sameTarget"] is False
+            assert other_target["semanticDiff"]["changed"] is False
             duplicate_fixture.terminate()
             duplicate_fixture.wait(timeout=3)
             duplicate_fixture = None

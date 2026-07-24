@@ -170,7 +170,9 @@ interaction route, call `deskpal_get_environment_status` to inspect active
 backends, blockers, shared-seat risks, and concrete setup actions. Use
 `deskpal_get_app_state` with an exact `windowId` or `windowName` to obtain one
 capture-bound image, target/focus/transform metadata, and bounded untrusted
-AT-SPI state; see [docs/app-state.md](docs/app-state.md).
+AT-SPI state. Pass a retained `previousCaptureId` for a privacy-safe structural
+revision and bounded same-target element diff; see
+[docs/app-state.md](docs/app-state.md).
 
 On GNOME 42, the optional logical-cursor extension adds
 `deskpal_agent_cursor_status`, `deskpal_agent_cursor_move`, and

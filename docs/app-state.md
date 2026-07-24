@@ -22,9 +22,15 @@ active-window mode.
 Image defaults are `maxWidth: 1920` and `maxHeight: 1080`. Set either dimension
 to `0` to leave that axis unconstrained; set both to `0` for full resolution.
 Semantic defaults are bounded and privacy-preserving: roles, accessible names,
-states, actions, and bounds are included, while free-form text and attributes
-require explicit `includeText` or `includeAttributes` opt-in. All semantic
+states, actions, and bounds are included. Offscreen nodes, free-form text, and
+attributes require explicit `includeOffscreen`, `includeText`, or
+`includeAttributes` opt-in. All semantic
 content is application-controlled and untrusted.
+
+An optional `previousCaptureId` requests a bounded semantic diff. The base must
+be a retained stable app-state capture; desktop screenshots cannot be diff
+bases. Unknown or expired IDs fail explicitly. Captures for a different exact
+X11 window identity return `sameTarget: false` without comparing elements.
 
 ## Output
 
@@ -36,7 +42,9 @@ A successful observation returns one image plus structured metadata:
 - `transform`: window-local source pixels to desktop/stage coordinates;
 - `captureId`: a short-lived ID bound to the exact target identity and geometry;
 - `semantic`: bounded AT-SPI state plus availability, completion, truncation,
-  and query-error metadata; and
+  and query-error metadata;
+- `semanticRevision`: an opaque informational structural revision; and
+- optional `semanticDiff`: same-target added, removed, and updated elements; and
 - `consistency`: whether identity, geometry, and focus stayed stable during the
   observation, with `retryRecommended` when they did not.
 
@@ -44,6 +52,19 @@ AT-SPI failure does not discard an otherwise valid visual observation. It
 returns `semantic.available: false` or partial completion metadata. Semantic
 bounds are reported in their own accessibility coordinate space and are never
 silently treated as image pixels.
+
+## Semantic revisions and diffs
+
+The canonical semantic projection uses complete live locator identity plus role
+and path as its element key. It includes states, actions, bounds, numeric value,
+and selection metadata. Accessible names, free-form text, and attributes never
+enter the revision or diff, even when separately returned by explicit opt-in.
+
+Revisions are non-cryptographic FNV-1a equality hints only. They are not
+security digests or authorization tokens and never replace fresh complete-
+locator resolution before mutation. Diff lists are
+bounded; `truncated: true` means callers must re-observe rather than assuming
+unreported elements were unchanged.
 
 ## Freshness and failure rules
 

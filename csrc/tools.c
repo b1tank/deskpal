@@ -677,6 +677,228 @@ static void filter_semantic_process(cJSON *semantic, long process_id)
 
 #define APP_STATE_METADATA_LIMIT (3 * 1024 * 1024)
 
+#define SEMANTIC_SNAPSHOT_LIMIT (256 * 1024)
+#define SEMANTIC_DIFF_ITEM_LIMIT 64
+
+typedef struct {
+	cJSON *record;
+	const char *key;
+} SemanticRecord;
+
+static cJSON *canonical_string_array(const cJSON *source)
+{
+	cJSON *result = cJSON_CreateArray();
+	if (!cJSON_IsArray(source)) return result;
+	int count = cJSON_GetArraySize(source);
+	char **values = calloc((size_t)count, sizeof(*values));
+	if (!values) return result;
+	int used = 0;
+	for (int i = 0; i < count; i++) {
+		const cJSON *item = cJSON_GetArrayItem(source, i);
+		if (cJSON_IsString(item)) values[used++] = item->valuestring;
+	}
+	for (int i = 0; i < used; i++)
+		for (int j = i + 1; j < used; j++)
+			if (strcmp(values[i], values[j]) > 0) {
+				char *swap = values[i]; values[i] = values[j]; values[j] = swap;
+			}
+	for (int i = 0; i < used; i++)
+		cJSON_AddItemToArray(result, cJSON_CreateString(values[i]));
+	free(values);
+	return result;
+}
+
+static cJSON *semantic_projection_record(const cJSON *node)
+{
+	const cJSON *locator = cJSON_GetObjectItem(node, "locator");
+	const cJSON *role = cJSON_GetObjectItem(node, "role");
+	const cJSON *path = cJSON_GetObjectItem(node, "path");
+	const cJSON *bus = cJSON_GetObjectItem(locator, "busName");
+	const cJSON *object = cJSON_GetObjectItem(locator, "objectPath");
+	const cJSON *pid = cJSON_GetObjectItem(locator, "processId");
+	if (!cJSON_IsString(role) || !cJSON_IsArray(path) ||
+	    !cJSON_IsString(bus) || !cJSON_IsString(object) || !cJSON_IsNumber(pid))
+		return NULL;
+	char *path_text = cJSON_PrintUnformatted(path);
+	if (!path_text) return NULL;
+	size_t key_len = strlen(bus->valuestring) + strlen(object->valuestring) +
+		strlen(role->valuestring) + strlen(path_text) + 64;
+	char *key = malloc(key_len);
+	if (!key) { free(path_text); return NULL; }
+	snprintf(key, key_len, "%s|%s|%.0f|%s|%s", bus->valuestring,
+	         object->valuestring, pid->valuedouble, role->valuestring, path_text);
+	free(path_text);
+
+	cJSON *record = cJSON_CreateObject();
+	cJSON_AddStringToObject(record, "key", key);
+	free(key);
+	cJSON_AddStringToObject(record, "role", role->valuestring);
+	cJSON_AddItemToObject(record, "path", cJSON_Duplicate(path, 1));
+	const char *fields[] = { "states", "bounds", "value", "selection" };
+	for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+		const cJSON *field = cJSON_GetObjectItem(node, fields[i]);
+		if (field) cJSON_AddItemToObject(record, fields[i], cJSON_Duplicate(field, 1));
+	}
+	cJSON_AddItemToObject(record, "actions",
+	                     canonical_string_array(cJSON_GetObjectItem(node, "actions")));
+	return record;
+}
+
+static void collect_semantic_records(const cJSON *nodes,
+                                     SemanticRecord *records, int capacity,
+                                     int *count, int *truncated)
+{
+	const cJSON *node = NULL;
+	cJSON_ArrayForEach(node, nodes) {
+		cJSON *record = semantic_projection_record(node);
+		if (record) {
+			if (*count < capacity) {
+				records[*count].record = record;
+				records[*count].key = cJSON_GetObjectItem(record, "key")->valuestring;
+				(*count)++;
+			} else {
+				*truncated = 1;
+				cJSON_Delete(record);
+			}
+		}
+		collect_semantic_records(cJSON_GetObjectItem(node, "children"),
+		                         records, capacity, count, truncated);
+	}
+}
+
+static int compare_semantic_records(const void *left, const void *right)
+{
+	const SemanticRecord *a = left;
+	const SemanticRecord *b = right;
+	return strcmp(a->key, b->key);
+}
+
+static int canonical_semantic_snapshot(const cJSON *semantic,
+                                       char **snapshot,
+                                       char revision[DESKPAL_SEMANTIC_REVISION_LEN],
+                                       int *projection_truncated)
+{
+	SemanticRecord records[300] = {0};
+	int count = 0;
+	*projection_truncated = cJSON_IsTrue(cJSON_GetObjectItem(semantic, "truncated")) ||
+		cJSON_IsTrue(cJSON_GetObjectItem(semantic, "partial")) ||
+		cJSON_IsTrue(cJSON_GetObjectItem(semantic, "incomplete"));
+	const cJSON *applications = cJSON_GetObjectItem(semantic, "applications");
+	const cJSON *application = NULL;
+	cJSON_ArrayForEach(application, applications) {
+		const cJSON *windows = cJSON_GetObjectItem(application, "windows");
+		const cJSON *window = NULL;
+		cJSON_ArrayForEach(window, windows)
+			collect_semantic_records(cJSON_GetObjectItem(window, "nodes"),
+			                         records, 300, &count, projection_truncated);
+	}
+	qsort(records, (size_t)count, sizeof(records[0]), compare_semantic_records);
+	cJSON *array = cJSON_CreateArray();
+	for (int i = 0; i < count; i++) cJSON_AddItemToArray(array, records[i].record);
+	char *text = cJSON_PrintUnformatted(array);
+	cJSON_Delete(array);
+	if (!text || strlen(text) > SEMANTIC_SNAPSHOT_LIMIT) {
+		free(text);
+		return -1;
+	}
+	uint64_t hash = UINT64_C(1469598103934665603);
+	for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+		hash ^= *p;
+		hash *= UINT64_C(1099511628211);
+	}
+	snprintf(revision, DESKPAL_SEMANTIC_REVISION_LEN,
+	         "fnv1a64-%016llx", (unsigned long long)hash);
+	*snapshot = text;
+	return 0;
+}
+
+static const cJSON *semantic_record_by_key(const cJSON *records, const char *key)
+{
+	const cJSON *record = NULL;
+	cJSON_ArrayForEach(record, records) {
+		const cJSON *candidate = cJSON_GetObjectItem(record, "key");
+		if (cJSON_IsString(candidate) && strcmp(candidate->valuestring, key) == 0)
+			return record;
+	}
+	return NULL;
+}
+
+static int json_fields_equal(const cJSON *left, const cJSON *right)
+{
+	if (!left && !right) return 1;
+	if (!left || !right) return 0;
+	return cJSON_Compare(left, right, 1);
+}
+
+static cJSON *semantic_diff(const DeskpalCapture *base,
+                            const cJSON *current_records,
+                            int projection_truncated)
+{
+	cJSON *diff = cJSON_CreateObject();
+	cJSON_AddStringToObject(diff, "baseCaptureId", base->id);
+	cJSON_AddBoolToObject(diff, "sameTarget", 1);
+	cJSON *added = cJSON_CreateArray();
+	cJSON *removed = cJSON_CreateArray();
+	cJSON *updated = cJSON_CreateArray();
+	cJSON_AddItemToObject(diff, "added", added);
+	cJSON_AddItemToObject(diff, "removed", removed);
+	cJSON_AddItemToObject(diff, "updated", updated);
+	int truncated = projection_truncated;
+	cJSON *base_records = cJSON_Parse(base->semantic_snapshot);
+	if (!cJSON_IsArray(base_records)) {
+		cJSON_Delete(base_records);
+		cJSON_AddBoolToObject(diff, "baseAvailable", 0);
+		cJSON_AddBoolToObject(diff, "changed", 0);
+		cJSON_AddBoolToObject(diff, "truncated", 1);
+		return diff;
+	}
+	cJSON_AddBoolToObject(diff, "baseAvailable", 1);
+	const char *fields[] = { "states", "bounds", "actions", "value", "selection" };
+	const cJSON *current = NULL;
+	cJSON_ArrayForEach(current, current_records) {
+		const char *key = cJSON_GetObjectItem(current, "key")->valuestring;
+		const cJSON *old = semantic_record_by_key(base_records, key);
+		if (!old) {
+			if (cJSON_GetArraySize(added) < SEMANTIC_DIFF_ITEM_LIMIT)
+				cJSON_AddItemToArray(added, cJSON_Duplicate(current, 1));
+			else truncated = 1;
+			continue;
+		}
+		cJSON *changed_fields = cJSON_CreateArray();
+		for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++)
+			if (!json_fields_equal(cJSON_GetObjectItem(old, fields[i]),
+			                       cJSON_GetObjectItem(current, fields[i])))
+				cJSON_AddItemToArray(changed_fields, cJSON_CreateString(fields[i]));
+		if (cJSON_GetArraySize(changed_fields) > 0) {
+			if (cJSON_GetArraySize(updated) < SEMANTIC_DIFF_ITEM_LIMIT) {
+				cJSON *change = cJSON_CreateObject();
+				cJSON_AddStringToObject(change, "key", key);
+				cJSON_AddStringToObject(change, "role",
+				                      cJSON_GetObjectItem(current, "role")->valuestring);
+				cJSON_AddItemToObject(change, "path",
+				                     cJSON_Duplicate(cJSON_GetObjectItem(current, "path"), 1));
+				cJSON_AddItemToObject(change, "changedFields", changed_fields);
+				cJSON_AddItemToArray(updated, change);
+			} else { truncated = 1; cJSON_Delete(changed_fields); }
+		} else cJSON_Delete(changed_fields);
+	}
+	const cJSON *old = NULL;
+	cJSON_ArrayForEach(old, base_records) {
+		const char *key = cJSON_GetObjectItem(old, "key")->valuestring;
+		if (!semantic_record_by_key(current_records, key)) {
+			if (cJSON_GetArraySize(removed) < SEMANTIC_DIFF_ITEM_LIMIT)
+				cJSON_AddItemToArray(removed, cJSON_Duplicate(old, 1));
+			else truncated = 1;
+		}
+	}
+	int changed = cJSON_GetArraySize(added) || cJSON_GetArraySize(removed) ||
+	              cJSON_GetArraySize(updated);
+	cJSON_AddBoolToObject(diff, "changed", changed);
+	cJSON_AddBoolToObject(diff, "truncated", truncated);
+	cJSON_Delete(base_records);
+	return diff;
+}
+
 static cJSON *semantic_stage_transform(const cJSON *semantic,
                                        const WindowInfo *target)
 {
@@ -770,10 +992,27 @@ cJSON *tool_get_app_state(const cJSON *params)
 	int max_nodes = json_int(params, "semanticMaxNodes", 120);
 	int include_text = json_bool(params, "includeText", 0);
 	int include_attributes = json_bool(params, "includeAttributes", 0);
+	int include_offscreen = json_bool(params, "includeOffscreen", 0);
+	const char *previous_capture_id = json_str(params, "previousCaptureId", NULL);
 	if (max_width < 0 || max_width > 8192 || max_height < 0 || max_height > 8192)
 		return mcp_tool_error_result("maxWidth/maxHeight must be between 0 and 8192");
 	if (max_depth < 1 || max_depth > 8 || max_nodes < 1 || max_nodes > 300)
 		return mcp_tool_error_result("semanticMaxDepth/maxNodes exceed app-state bounds");
+
+	DeskpalCapture previous_capture = {0};
+	if (previous_capture_id) {
+		int previous_lookup = captures_lookup(previous_capture_id, &previous_capture);
+		if (previous_lookup == -2)
+			return app_state_error_result("previous_capture_stale",
+				"previousCaptureId is stale; compare against a newer observation", 0);
+		if (previous_lookup != 0)
+			return app_state_error_result("previous_capture_unknown",
+				"previousCaptureId is unknown or no longer retained", 0);
+		if (previous_capture.target != DESKPAL_CAPTURE_WINDOW ||
+		    !previous_capture.semantic_snapshot)
+			return app_state_error_result("previous_capture_not_app_state",
+				"previousCaptureId must come from a stable get_app_state observation", 0);
+	}
 
 	char error[256] = {0};
 	const char *target_error_code = "invalid_target";
@@ -791,9 +1030,20 @@ cJSON *tool_get_app_state(const cJSON *params)
 		return mcp_tool_error_result(error);
 
 	cJSON *semantic = accessibility_tree_exact(NULL, before.title,
-		max_depth, max_nodes, 0, include_text, include_attributes);
+		max_depth, max_nodes, include_offscreen, include_text, include_attributes);
 	if (!semantic) semantic = cJSON_CreateObject();
 	filter_semantic_process(semantic, before.pid);
+	char *semantic_snapshot = NULL;
+	char semantic_revision[DESKPAL_SEMANTIC_REVISION_LEN] = {0};
+	int projection_truncated = 0;
+	if (canonical_semantic_snapshot(semantic, &semantic_snapshot,
+	                               semantic_revision,
+	                               &projection_truncated) != 0) {
+		free(image.png);
+		cJSON_Delete(semantic);
+		return mcp_tool_error_result(
+			"Canonical semantic projection exceeded its 256 KiB safety limit");
+	}
 
 	WindowInfo after;
 	int resolved_after = resolve_app_state_target(
@@ -801,6 +1051,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 	unsigned long focused_after = x11_get_active_window();
 	if (!resolved_after || !same_window_identity(&before, &after)) {
 		free(image.png);
+		free(semantic_snapshot);
 		cJSON_Delete(semantic);
 		return app_state_error_result("target_replaced_during_observation",
 			"Target disappeared, was replaced, or became ambiguous during observation",
@@ -815,6 +1066,44 @@ cJSON *tool_get_app_state(const cJSON *params)
 	                          image.source_height == before.height;
 	int stable = geometry_stable && focus_stable && transform_supported;
 
+	cJSON *diff = NULL;
+	if (previous_capture_id) {
+		int same_target = previous_capture.window_id == before.id &&
+			previous_capture.process_id == before.pid &&
+			strcmp(previous_capture.title, before.title) == 0 &&
+			strcmp(previous_capture.app_class, before.app_class) == 0;
+		if (!same_target) {
+			diff = cJSON_CreateObject();
+			cJSON_AddStringToObject(diff, "baseCaptureId", previous_capture.id);
+			cJSON_AddBoolToObject(diff, "sameTarget", 0);
+			cJSON_AddBoolToObject(diff, "changed", 0);
+			cJSON_AddBoolToObject(diff, "truncated", 0);
+		} else if (!stable) {
+			diff = cJSON_CreateObject();
+			cJSON_AddStringToObject(diff, "baseCaptureId", previous_capture.id);
+			cJSON_AddBoolToObject(diff, "sameTarget", 1);
+			cJSON_AddBoolToObject(diff, "currentStable", 0);
+			cJSON_AddBoolToObject(diff, "changed", 0);
+			cJSON_AddBoolToObject(diff, "truncated", 0);
+		} else {
+			cJSON *current_records = cJSON_Parse(semantic_snapshot);
+			if (!cJSON_IsArray(current_records)) {
+				cJSON_Delete(current_records);
+				free(image.png);
+				free(semantic_snapshot);
+				cJSON_Delete(semantic);
+				cJSON_Delete(semantic_transform);
+				return mcp_tool_error_result("Could not parse canonical semantic projection");
+			}
+			diff = semantic_diff(&previous_capture, current_records,
+			                     projection_truncated);
+			cJSON_AddStringToObject(diff, "baseRevision",
+			                      previous_capture.semantic_revision);
+			cJSON_AddStringToObject(diff, "currentRevision", semantic_revision);
+			cJSON_Delete(current_records);
+		}
+	}
+
 	DeskpalCapture capture = {0};
 	if (stable && captures_store_window(before.id, before.pid,
 	                                   before.title, before.app_class,
@@ -822,16 +1111,21 @@ cJSON *tool_get_app_state(const cJSON *params)
 	                                   before.width, before.height,
 	                                   image.source_width, image.source_height,
 	                                   image.image_width, image.image_height,
+	                                   semantic_revision, semantic_snapshot,
 	                                   &capture) != 0) {
 		free(image.png);
+		free(semantic_snapshot);
+		cJSON_Delete(diff);
 		cJSON_Delete(semantic);
 		cJSON_Delete(semantic_transform);
 		return mcp_tool_error_result("Could not register stable app-state capture");
 	}
+	free(semantic_snapshot);
 
 	char *base64 = screenshot_base64_encode(image.png, image.png_len);
 	free(image.png);
 	if (!base64) {
+		cJSON_Delete(diff);
 		cJSON_Delete(semantic);
 		cJSON_Delete(semantic_transform);
 		return mcp_tool_error_result("App-state image base64 encoding failed");
@@ -886,6 +1180,10 @@ cJSON *tool_get_app_state(const cJSON *params)
 	cJSON_AddBoolToObject(transform, "supported", transform_supported);
 	cJSON_AddItemToObject(state, "transform", transform);
 	if (stable) cJSON_AddStringToObject(state, "captureId", capture.id);
+	cJSON_AddStringToObject(state, "semanticRevision", semantic_revision);
+	cJSON_AddBoolToObject(state, "semanticProjectionTruncated",
+	                     projection_truncated);
+	if (diff) cJSON_AddItemToObject(state, "semanticDiff", diff);
 	cJSON_AddItemToObject(state, "semantic", semantic);
 	cJSON_AddItemToObject(state, "semanticTransform", semantic_transform);
 
@@ -3712,10 +4010,12 @@ void tools_register_all(void)
 		"  \"properties\": {"
 		"    \"windowId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 64},"
 		"    \"windowName\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 255, \"description\": \"Exact case-sensitive title\"},"
+		"    \"previousCaptureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63, \"description\": \"Optional retained stable app-state capture to diff\"},"
 		"    \"maxWidth\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 8192, \"default\": 1920},"
 		"    \"maxHeight\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 8192, \"default\": 1080},"
 		"    \"semanticMaxDepth\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 8, \"default\": 4},"
 		"    \"semanticMaxNodes\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 300, \"default\": 120},"
+		"    \"includeOffscreen\": {\"type\": \"boolean\", \"default\": false},"
 		"    \"includeText\": {\"type\": \"boolean\", \"default\": false},"
 		"    \"includeAttributes\": {\"type\": \"boolean\", \"default\": false}"
 		"  },"

@@ -353,11 +353,13 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 			return mcp_tool_error_result(
 				"semanticMaxDepth must be an integer between 1 and 8 and semanticMaxNodes between 1 and 300");
 		if (!bounded_string_if_present(arguments, "windowId", 64) ||
-		    !bounded_string_if_present(arguments, "windowName", 255))
+		    !bounded_string_if_present(arguments, "windowName", 255) ||
+		    !bounded_string_if_present(arguments, "previousCaptureId", 63))
 			return mcp_tool_error_result(
 				"windowId/windowName must be non-empty bounded strings");
 		if (!boolean_if_present(arguments, "includeText") ||
-		    !boolean_if_present(arguments, "includeAttributes"))
+		    !boolean_if_present(arguments, "includeAttributes") ||
+		    !boolean_if_present(arguments, "includeOffscreen"))
 			return mcp_tool_error_result(
 				"includeText/includeAttributes must be booleans");
 	}

@@ -18,7 +18,8 @@ the user's visible desktop:
   session IDs, missing-window safety, OCR, screenshots, and binary replacement.
 - `e2e_computer_use.py`: deterministic Tk workflow for app identity, environment
   capability/blocker reporting, exact capture-bound app-state observations,
-  screenshot scaling metadata, screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
+  privacy-safe semantic revisions/diffs, screenshot scaling metadata,
+  screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
   controller lock contention/release, and isolated-operation independence.
 - `e2e_accessibility.py`: optional AT-SPI tool schemas, unavailable capability,
   bounded semantic tree output, filtering/truncation, logical bounds, actions,

@@ -7,6 +7,7 @@
 #include "captures.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
 #include <time.h>
@@ -49,6 +50,7 @@ static int store_capture(DeskpalCapture *next, DeskpalCapture *capture)
 	                       (unsigned long long)++sequence);
 	if (written < 0 || (size_t)written >= sizeof(next->id)) return -1;
 	next->created_monotonic_ms = monotonic_ms();
+	free((void *)history[history_next].semantic_snapshot);
 	history[history_next] = *next;
 	history_next = (history_next + 1) % CAPTURE_HISTORY_SIZE;
 	*capture = *next;
@@ -75,10 +77,13 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int window_width, int window_height,
                           int source_width, int source_height,
                           int image_width, int image_height,
+                          const char *semantic_revision,
+                          const char *semantic_snapshot,
                           DeskpalCapture *capture)
 {
 	if (window_id == 0 || process_id <= 0 || !title || !title[0] ||
-	    !app_class || !app_class[0] || window_width <= 0 || window_height <= 0)
+	    !app_class || !app_class[0] || window_width <= 0 || window_height <= 0 ||
+	    !semantic_revision || !semantic_snapshot)
 		return -1;
 	DeskpalCapture next = {
 		.target = DESKPAL_CAPTURE_WINDOW,
@@ -95,10 +100,23 @@ int captures_store_window(unsigned long window_id, long process_id,
 	};
 	int title_written = snprintf(next.title, sizeof(next.title), "%s", title);
 	int class_written = snprintf(next.app_class, sizeof(next.app_class), "%s", app_class);
+	int revision_written = snprintf(next.semantic_revision,
+		sizeof(next.semantic_revision), "%s", semantic_revision);
+	char *snapshot_copy = strdup(semantic_snapshot);
 	if (title_written < 0 || (size_t)title_written >= sizeof(next.title) ||
-	    class_written < 0 || (size_t)class_written >= sizeof(next.app_class))
+	    class_written < 0 || (size_t)class_written >= sizeof(next.app_class) ||
+	    revision_written < 0 ||
+	    (size_t)revision_written >= sizeof(next.semantic_revision) ||
+	    !snapshot_copy) {
+		free(snapshot_copy);
 		return -1;
-	return store_capture(&next, capture);
+	}
+	next.semantic_snapshot = snapshot_copy;
+	if (store_capture(&next, capture) != 0) {
+		free(snapshot_copy);
+		return -1;
+	}
+	return 0;
 }
 
 int captures_lookup(const char *id, DeskpalCapture *capture)
@@ -118,6 +136,8 @@ int captures_lookup(const char *id, DeskpalCapture *capture)
 
 void captures_cleanup(void)
 {
+	for (unsigned int i = 0; i < CAPTURE_HISTORY_SIZE; i++)
+		free((void *)history[i].semantic_snapshot);
 	memset(history, 0, sizeof(history));
 	history_next = 0;
 	session_nonce = 0;
