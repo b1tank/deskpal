@@ -43,15 +43,14 @@ AT-SPI coverage for the current session. Starting the command while an old
 Slack process is still alive may delegate to that instance and not change its
 renderer; a complete application restart is required.
 
-### Slack limitations
+### Renderer-accessibility-only limitations
 
-- The flag was applied for this launch only. No desktop file, autostart entry,
+- The flag was applied for that launch only. No desktop file, autostart entry,
   wrapper, or profile setting was modified.
-- Slack still runs with `--ozone-platform=wayland`. Its semantic tree is rich,
-  but Deskpal cannot yet bind it to exact X11/Xwayland image identity for
-  `get_app_state` and capture-bound cursor actions.
-- Relaunching with Xwayland as well as forced renderer accessibility would be a
-  separate user-visible experiment requiring explicit approval.
+- With `--ozone-platform=wayland`, the semantic tree became rich but Deskpal
+  could not bind it to exact X11/Xwayland image identity for `get_app_state`.
+- Xwayland validation was therefore performed as a separate approved
+  experiment, recorded below.
 - Deep Chromium trees can exceed bounded depth/node budgets. Partial/truncated
   metadata must be honored; callers should narrow exact application/window
   scopes and request only the depth they need.
@@ -60,6 +59,52 @@ renderer; a complete application restart is required.
 
 To return to the normal launch configuration, fully quit Slack and launch it
 without the flag.
+
+## Slack Xwayland experiment
+
+With separate explicit approval, Deskpal gracefully stopped Slack and relaunched
+the same profile for one session with:
+
+```bash
+env -u WAYLAND_DISPLAY \
+  XDG_SESSION_TYPE=x11 \
+  ELECTRON_OZONE_PLATFORM_HINT=x11 \
+  /usr/lib/slack/slack \
+  --force-renderer-accessibility \
+  --ozone-platform=x11
+```
+
+The process tree and renderer both reported `--ozone-platform=x11`. Deskpal then
+resolved the exact Slack window as:
+
+```text
+windowId: 0xe00004
+class: slack
+processId: 900024
+geometry: 104,128 3736x2032
+```
+
+A stable `get_app_state` observation succeeded with a 1920x1044 image and a
+short-lived capture ID. The exact-PID semantic tree included native controls,
+the menu bar, and a `document web` subtree. The AT-SPI-to-stage transform was
+verified at scale 2 with zero offset against the X11 frame, and focus/identity/
+geometry remained stable during capture.
+
+This clears both prerequisites for capture-bound semantic actions on this Slack
+launch: renderer accessibility and exact X11/Xwayland surface identity.
+
+### Xwayland limitations
+
+- This remains a one-session launch. No persistent Slack launcher was changed.
+- The bounded app-state tree was partial/truncated at the requested depth/node
+  budget; callers must re-observe with a scope and budget suitable for the
+  intended control.
+- The experiment performed read-only observation only. No Slack control was
+  invoked because a harmless, explicit postcondition was not selected.
+- Xwayland compatibility is not the final architecture. Native-Wayland exact
+  identity still requires the compositor broker.
+- Returning to a normal Slack launch removes both temporary flags and may return
+  the app to native Wayland with frame-only renderer accessibility.
 
 ## VS Code Insiders baseline
 
@@ -74,7 +119,7 @@ VS Code Insiders was not restarted and no configuration was changed.
 ## Product consequence
 
 Renderer accessibility setup and exact surface identity are separate gates.
-The Slack experiment clears the renderer-accessibility gate but not native
-Wayland capture identity. Until the compositor broker exists, full
-capture-bound semantic actions require an exact X11/Xwayland window in addition
-to a rich AT-SPI tree.
+The first Slack experiment cleared only renderer accessibility; the approved
+Xwayland experiment cleared both for one launch. Until the compositor broker
+exists, full capture-bound semantic actions require this X11/Xwayland identity
+in addition to a rich AT-SPI tree.

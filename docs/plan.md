@@ -131,6 +131,8 @@ broker actions will drive.
       Chromium/Electron apps expose rich AT-SPI trees; see
       [chromium-accessibility.md](chromium-accessibility.md). Never change the
       setting silently.
+  - [x] Verify a temporary Slack Xwayland launch with renderer accessibility,
+        exact X11 identity, stable capture ID, and a verified 2x semantic transform.
 - [ ] Add accessibility events, stable signatures, element diffs, frame-settle
       detection, and capture-bound pixel verification.
 - [ ] Add `backgroundOnly` and `foregroundAllowed` delivery policy plus
