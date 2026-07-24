@@ -119,6 +119,7 @@ def run_suite():
             assert environment["capabilities"]["semanticSetText"]["available"] is False
             assert environment["capabilities"]["semanticSetValue"]["available"] is False
             assert environment["capabilities"]["semanticSelect"]["available"] is False
+            assert environment["capabilities"]["semanticReplaceTextRange"]["available"] is False
             assert environment["capabilities"]["processLaunch"]["available"] is True
             assert environment["capabilities"]["filesystem"]["available"] is False
             blocker_ids = {blocker["id"] for blocker in environment["blockers"]}

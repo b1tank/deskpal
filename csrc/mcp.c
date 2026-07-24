@@ -50,7 +50,8 @@ void mcp_register_tool(const char *name, const char *description,
 	    strcmp(name, "agent_semantic_press") != 0 &&
 	    strcmp(name, "agent_semantic_set_text") != 0 &&
 	    strcmp(name, "agent_semantic_set_value") != 0 &&
-	    strcmp(name, "agent_semantic_select") != 0) {
+	    strcmp(name, "agent_semantic_select") != 0 &&
+	    strcmp(name, "agent_semantic_replace_text_range") != 0) {
 		cJSON *properties = cJSON_GetObjectItem(schema, "properties");
 		if (properties && cJSON_IsObject(properties) &&
 		    !cJSON_GetObjectItem(properties, "sessionId")) {
@@ -411,12 +412,13 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 			? cJSON_GetObjectItem(arguments, "operation") : NULL;
 		if (!operation || !cJSON_IsString(operation) ||
 		    (strcmp(operation->valuestring, "setText") != 0 &&
+		     strcmp(operation->valuestring, "replaceTextRange") != 0 &&
 		     strcmp(operation->valuestring, "setValue") != 0 &&
 		     strcmp(operation->valuestring, "select") != 0 &&
 		     strcmp(operation->valuestring, "focus") != 0 &&
 		     strcmp(operation->valuestring, "invoke") != 0))
 			return mcp_tool_error_result(
-				"operation must be setText, setValue, select, focus, or invoke");
+				"operation must be setText, replaceTextRange, setValue, select, focus, or invoke");
 		if (!integer_in_range(arguments, "timeoutMs", 1, 5000))
 			return mcp_tool_error_result(
 				"timeoutMs must be an integer between 1 and 5000");
@@ -430,6 +432,20 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 			if (verify)
 				return mcp_tool_error_result(
 					"setText uses automatic text verification and does not accept verify");
+		} else if (strcmp(operation->valuestring, "replaceTextRange") == 0) {
+			const cJSON *value = cJSON_GetObjectItem(arguments, "value");
+			const cJSON *start = cJSON_GetObjectItem(arguments, "startOffset");
+			const cJSON *end = cJSON_GetObjectItem(arguments, "endOffset");
+			if (!value || !cJSON_IsString(value) ||
+			    strlen(value->valuestring) > 2048 || !start || !end ||
+			    !integer_in_range(arguments, "startOffset", 0, 4096) ||
+			    !integer_in_range(arguments, "endOffset", 0, 4096) ||
+			    end->valueint < start->valueint)
+				return mcp_tool_error_result(
+					"replaceTextRange requires value and ordered character offsets between 0 and 4096");
+			if (verify)
+				return mcp_tool_error_result(
+					"replaceTextRange uses automatic exact-text verification and does not accept verify");
 		} else if (strcmp(operation->valuestring, "setValue") == 0) {
 			const cJSON *value = cJSON_GetObjectItem(arguments, "value");
 			if (!value || !cJSON_IsNumber(value) || !isfinite(value->valuedouble))
@@ -578,6 +594,31 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 			return mcp_tool_error_result(
 				"value must be one direct child index between 0 and 4096");
 	}
+	if (strcmp(tool_name, "agent_semantic_replace_text_range") == 0) {
+		if (!bounded_string_if_present(arguments, "captureId", 63) ||
+		    !cJSON_GetObjectItem(arguments, "captureId") ||
+		    !bounded_string_if_present(arguments, "cursorId", 40) ||
+		    !bounded_string_if_present(arguments, "color", 7) ||
+		    !bounded_string_if_present(arguments, "label", 48) ||
+		    !integer_in_range(arguments, "timeoutMs", 1, 5000))
+			return mcp_tool_error_result(
+				"agent_semantic_replace_text_range has invalid capture, cursor style, or timeout fields");
+		const cJSON *target = cJSON_GetObjectItem(arguments, "target");
+		if (!valid_accessibility_selector(target) ||
+		    !cJSON_GetObjectItem(target, "path"))
+			return mcp_tool_error_result(
+				"target requires role, path, busName, objectPath, and processId");
+		const cJSON *value = cJSON_GetObjectItem(arguments, "value");
+		const cJSON *start = cJSON_GetObjectItem(arguments, "startOffset");
+		const cJSON *end = cJSON_GetObjectItem(arguments, "endOffset");
+		if (!value || !cJSON_IsString(value) || strlen(value->valuestring) > 2048 ||
+		    !start || !end ||
+		    !integer_in_range(arguments, "startOffset", 0, 4096) ||
+		    !integer_in_range(arguments, "endOffset", 0, 4096) ||
+		    end->valueint < start->valueint)
+			return mcp_tool_error_result(
+				"text range requires a value and ordered character offsets between 0 and 4096");
+	}
 	if (strcmp(tool_name, "type_text") == 0) {
 		if (!integer_in_range(arguments, "delay", 0, 1000))
 			return mcp_tool_error_result("delay must be an integer between 0 and 1000 ms");
@@ -649,7 +690,8 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "agent_semantic_press") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_text") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_value") != 0 &&
-		strcmp(tool_name, "agent_semantic_select") != 0;
+		strcmp(tool_name, "agent_semantic_select") != 0 &&
+		strcmp(tool_name, "agent_semantic_replace_text_range") != 0;
 	if (session_id && !session_routable &&
 	    (strcmp(tool_name, "accessibility_status") == 0 ||
 	     strcmp(tool_name, "get_accessibility_tree") == 0 ||
@@ -658,7 +700,8 @@ static cJSON *handle_tools_call(const cJSON *params)
 	     strcmp(tool_name, "agent_semantic_press") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_text") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_value") == 0 ||
-	     strcmp(tool_name, "agent_semantic_select") == 0))
+	     strcmp(tool_name, "agent_semantic_select") == 0 ||
+	     strcmp(tool_name, "agent_semantic_replace_text_range") == 0))
 		return mcp_tool_error_result(
 			"Accessibility tools inspect the visible desktop only; sessionId is not supported");
 	if (session_id && session_routable &&

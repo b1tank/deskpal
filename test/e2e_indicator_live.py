@@ -142,6 +142,12 @@ def run_suite():
         check=True,
         stdout=subprocess.DEVNULL,
     )
+    subprocess.run(
+        ["xdotool", "windowactivate", "--sync", fixture_window_id],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     time.sleep(0.3)
     existing_ids = {cursor["cursorId"] for cursor in raw_status()["cursors"]}
     owner = DeskpalClient(name="indicator-live-owner")
@@ -157,6 +163,7 @@ def run_suite():
         assert environment["capabilities"]["semanticSetText"]["available"] is True, environment
         assert environment["capabilities"]["semanticSetValue"]["available"] is True, environment
         assert environment["capabilities"]["semanticSelect"]["available"] is True, environment
+        assert environment["capabilities"]["semanticReplaceTextRange"]["available"] is True, environment
         assert environment["capabilities"]["backgroundPixelInput"]["available"] is False, environment
         blocker_ids = {blocker["id"] for blocker in environment["blockers"]}
         assert "non_interfering_pixel_input_unavailable" in blocker_ids, environment
@@ -314,6 +321,59 @@ def run_suite():
         assert idempotent_text["actionApplied"] is False, idempotent_text
         assert idempotent_text["inputDelivered"] is False, idempotent_text
         owner.tool("agent_cursor_hide", {"cursorId": "semantic-text-live"})
+        range_arguments = {
+            "captureId": app_state["captureId"],
+            "target": semantic_entry["locator"],
+            "startOffset": 9,
+            "endOffset": 13,
+            "value": "range",
+            "cursorId": "semantic-range-live",
+            "color": "#A855F7",
+            "label": "semantic text range",
+        }
+        range_result = json.loads(
+            text(owner.tool("agent_semantic_replace_text_range", range_arguments))
+        )
+        assert range_result["operation"] == "replaceTextRange", range_result
+        assert range_result["verified"] is True, range_result
+        assert range_result["actionApplied"] is True, range_result
+        assert range_result["sharedPointerMoved"] is False, range_result
+        range_state_result = owner.tool(
+            "get_app_state", {"windowName": fixture_title}
+        )
+        range_state = range_state_result["appState"]
+        range_entry = next(
+            node for node in find_semantic_nodes(range_state["semantic"])
+            if node.get("name") == "Validation message"
+        )
+        idempotent_range = json.loads(
+            text(
+                owner.tool(
+                    "agent_semantic_replace_text_range",
+                    {
+                        **range_arguments,
+                        "captureId": range_state["captureId"],
+                        "target": range_entry["locator"],
+                        "endOffset": 14,
+                    },
+                )
+            )
+        )
+        assert idempotent_range["verified"] is True, idempotent_range
+        assert idempotent_range["actionApplied"] is False, idempotent_range
+        invalid_range = owner.tool(
+            "agent_semantic_replace_text_range",
+            {
+                **range_arguments,
+                "captureId": range_state["captureId"],
+                "target": range_entry["locator"],
+                "endOffset": 999,
+            },
+        )
+        assert invalid_range.get("isError") is True, invalid_range
+        invalid_range_payload = json.loads(text(invalid_range))
+        assert invalid_range_payload["mutationIssued"] is False
+        owner.tool("agent_cursor_hide", {"cursorId": "semantic-range-live"})
         set_value_arguments = {
             "captureId": app_state["captureId"],
             "target": semantic_volume["locator"],

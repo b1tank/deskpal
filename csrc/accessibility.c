@@ -997,6 +997,36 @@ static char *action_text(AtspiAccessible *node, int *truncated)
 	return read_accessible_text(node, truncated);
 }
 
+static char *replace_text_range_expected(AtspiAccessible *node,
+                                         int start_offset, int end_offset,
+                                         const char *replacement,
+                                         char **source_text)
+{
+	int truncated = 0;
+	char *current = action_text(node, &truncated);
+	if (!current || truncated || !g_utf8_validate(current, -1, NULL)) {
+		g_free(current);
+		return NULL;
+	}
+	long character_count = g_utf8_strlen(current, -1);
+	if (start_offset < 0 || end_offset < start_offset ||
+	    end_offset > character_count) {
+		g_free(current);
+		return NULL;
+	}
+	const char *start = g_utf8_offset_to_pointer(current, start_offset);
+	const char *end = g_utf8_offset_to_pointer(current, end_offset);
+	size_t prefix_len = (size_t)(start - current);
+	size_t replacement_len = strlen(replacement);
+	size_t suffix_len = strlen(end);
+	char *expected = g_malloc(prefix_len + replacement_len + suffix_len + 1);
+	memcpy(expected, current, prefix_len);
+	memcpy(expected + prefix_len, replacement, replacement_len);
+	memcpy(expected + prefix_len + replacement_len, end, suffix_len + 1);
+	*source_text = current;
+	return expected;
+}
+
 static AccessibilityMutation perform_set_text(AtspiAccessible *node,
 	                                           const char *value)
 {
@@ -1813,6 +1843,10 @@ cJSON *accessibility_action(const cJSON *params)
 	AccessibilityIdentity verify_identity = {0};
 	AtspiAction *prepared_action = NULL;
 	int prepared_action_index = -1;
+	char *owned_expected_text = NULL;
+	char *owned_range_source_text = NULL;
+	int range_start = -1;
+	int range_end = -1;
 	if (strcmp(operation, "invoke") == 0) {
 		if (parse_selector(verify_object, &verify_selector) != 0) {
 			cJSON_AddStringToObject(result, "errorCode", "verification_required");
@@ -1836,6 +1870,10 @@ cJSON *accessibility_action(const cJSON *params)
 		verify_selector = target_selector;
 		if (strcmp(operation, "setText") == 0) {
 			expected_text = cJSON_GetObjectItem(params, "value")->valuestring;
+			verify_text = 1;
+		} else if (strcmp(operation, "replaceTextRange") == 0) {
+			range_start = cJSON_GetObjectItem(params, "startOffset")->valueint;
+			range_end = cJSON_GetObjectItem(params, "endOffset")->valueint;
 			verify_text = 1;
 		} else if (strcmp(operation, "setValue") == 0) {
 			expected_value = cJSON_GetObjectItem(params, "value")->valuedouble;
@@ -1890,6 +1928,20 @@ cJSON *accessibility_action(const cJSON *params)
 			"Could not bind target to one live AT-SPI object");
 		release_search(&target_search);
 		goto action_done;
+	}
+	if (strcmp(operation, "replaceTextRange") == 0) {
+		const char *replacement = cJSON_GetObjectItem(params, "value")->valuestring;
+		owned_expected_text = replace_text_range_expected(
+			target_search.match, range_start, range_end, replacement,
+			&owned_range_source_text);
+		if (!owned_expected_text) {
+			cJSON_AddStringToObject(result, "errorCode", "text_range_invalid");
+			cJSON_AddStringToObject(result, "error",
+				"Text range could not be read completely or offsets were invalid");
+			release_search(&target_search);
+			goto action_done;
+		}
+		expected_text = owned_expected_text;
 	}
 
 	int enabled = 0;
@@ -1948,7 +2000,7 @@ cJSON *accessibility_action(const cJSON *params)
 	cJSON_AddItemToObject(result, "precondition", precondition);
 	if (!enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
-	    (strcmp(operation, "setText") == 0 && !editable) ||
+	    ((strcmp(operation, "setText") == 0 || strcmp(operation, "replaceTextRange") == 0) && !editable) ||
 	    (strcmp(operation, "setValue") == 0 &&
 	     (expected_value < minimum_value || expected_value > maximum_value ||
 	      (value_increment > 0 && fabs((expected_value - minimum_value) /
@@ -1989,8 +2041,10 @@ cJSON *accessibility_action(const cJSON *params)
 	cJSON *verification = cJSON_CreateObject();
 	cJSON_AddItemToObject(verification, "target",
 		search_locator(&verify_pre, &verify_selector));
-	if (verify_text)
+	if (verify_text && strcmp(operation, "replaceTextRange") != 0)
 		cJSON_AddStringToObject(verification, "expectedText", expected_text);
+	if (strcmp(operation, "replaceTextRange") == 0)
+		cJSON_AddBoolToObject(verification, "expectedTextDerived", 1);
 	if (verify_state) {
 		cJSON_AddStringToObject(verification, "expectedState", expected_state_name);
 		cJSON_AddBoolToObject(verification, "expectedStateValue", expected_state_value);
@@ -2105,7 +2159,7 @@ cJSON *accessibility_action(const cJSON *params)
 	    node_state(target_search.match, ATSPI_STATE_EDITABLE, &editable) != 0 ||
 	    !enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
-	    (strcmp(operation, "setText") == 0 && !editable) ||
+	    ((strcmp(operation, "setText") == 0 || strcmp(operation, "replaceTextRange") == 0) && !editable) ||
 	    !value_precondition_valid || !selection_precondition_valid) {
 		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
 		cJSON_AddStringToObject(result, "error",
@@ -2204,7 +2258,7 @@ cJSON *accessibility_action(const cJSON *params)
 	    node_state(target_dispatch.match, ATSPI_STATE_EDITABLE, &editable) != 0 ||
 	    !enabled || !showing ||
 	    (strcmp(operation, "focus") == 0 && !focusable) ||
-	    (strcmp(operation, "setText") == 0 && !editable) ||
+	    ((strcmp(operation, "setText") == 0 || strcmp(operation, "replaceTextRange") == 0) && !editable) ||
 	    !value_precondition_valid || !selection_precondition_valid) {
 		cJSON_AddStringToObject(result, "errorCode", "precondition_changed");
 		cJSON_AddStringToObject(result, "error",
@@ -2212,6 +2266,22 @@ cJSON *accessibility_action(const cJSON *params)
 		release_search(&target_dispatch);
 		release_search(&target_search);
 		goto action_done;
+	}
+	if (strcmp(operation, "replaceTextRange") == 0) {
+		int source_truncated = 0;
+		char *current_source = action_text(target_dispatch.match,
+		                                  &source_truncated);
+		int source_unchanged = current_source && !source_truncated &&
+			strcmp(current_source, owned_range_source_text) == 0;
+		g_free(current_source);
+		if (!source_unchanged) {
+			cJSON_AddStringToObject(result, "errorCode", "text_source_changed");
+			cJSON_AddStringToObject(result, "error",
+				"Text changed after range computation; mutation was not issued");
+			release_search(&target_dispatch);
+			release_search(&target_search);
+			goto action_done;
+		}
 	}
 	release_search(&target_search);
 	target_search = target_dispatch;
@@ -2294,7 +2364,8 @@ cJSON *accessibility_action(const cJSON *params)
 	clear_verification(&dispatch_verification);
 
 	AccessibilityMutation mutation = {0};
-	if (strcmp(operation, "setText") == 0) {
+	if (strcmp(operation, "setText") == 0 ||
+	    strcmp(operation, "replaceTextRange") == 0) {
 		mutation = perform_set_text(target_search.match, expected_text);
 	} else if (strcmp(operation, "setValue") == 0) {
 		mutation = perform_set_value(target_search.match, expected_value);
@@ -2420,6 +2491,8 @@ cJSON *accessibility_action(const cJSON *params)
 	clear_verification(&observed);
 
 action_done:
+	g_free(owned_expected_text);
+	g_free(owned_range_source_text);
 	if (prepared_action) g_object_unref(prepared_action);
 	clear_identity(&target_identity);
 	clear_identity(&verify_identity);

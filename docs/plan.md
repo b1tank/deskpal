@@ -121,6 +121,8 @@ broker actions will drive.
         child bounds and selected-state verification.
   - [x] Verify expandable controls and idempotency through advertised actions
         and the AT-SPI `expanded` state.
+  - [x] Ship capture-bound atomic Unicode text-range replacement with exact
+        resulting-text verification.
   - [ ] Identify a toolkit with working AT-SPI `Component.scroll_to`; GTK3 and
         GTK4 fixture probes currently fail, and no disruptive fallback is allowed.
   - [ ] Identify a trustworthy menu tree; GTK3 popover items remain non-showing

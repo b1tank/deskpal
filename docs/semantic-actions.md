@@ -1,8 +1,9 @@
 # Capture-bound semantic actions
 
 `agent_semantic_press`, `agent_semantic_set_text`,
-`agent_semantic_set_value`, and `agent_semantic_select` are Deskpal's first
-end-to-end non-pointer action routes. They connect an exact `get_app_state`
+`agent_semantic_set_value`, `agent_semantic_select`, and
+`agent_semantic_replace_text_range` are Deskpal's first end-to-end non-pointer
+action routes. They connect an exact `get_app_state`
 observation, the logical agent cursor, and a verified AT-SPI mutation without
 falling back to XTest, uinput, forced focus, coordinate clicking, keyboard
 input, or clipboard replacement.
@@ -24,7 +25,14 @@ The caller supplies:
 - for `agent_semantic_select`, one direct child index within the freshly
   observed AT-SPI selection container. Verification checks that exact child is
   selected; exclusivity is guaranteed only when the control itself is
-  single-select.
+  single-select; or
+- for `agent_semantic_replace_text_range`, ordered Unicode character offsets
+  and replacement text. Deskpal reads the full bounded value, computes one
+  resulting string, rechecks that the source text is unchanged immediately
+  before dispatch, performs one AT-SPI set operation to avoid partial
+  delete/insert outcomes, and verifies the exact result without echoing the
+  observed or derived full text. Text beyond the
+  bounded 4096-character read/offset limit is rejected.
 
 Deskpal revalidates the captured X11 identity and geometry, refreshes the exact
 AT-SPI window, filters it to the captured PID, re-resolves the complete locator,
@@ -70,9 +78,9 @@ application mutation.
   currently reported as unknown rather than falsely claimed unchanged.
 - These first slices implement invoke/press, verified checkbox toggles through
   press, whole-value text replacement, numeric/range value mutation, and direct
-  child selection, and expandable controls through advertised actions plus the
-  `expanded` state. Text-range, scroll, and menu-specific routes remain future
-  work.
+  child selection, Unicode text-range replacement, and expandable controls
+  through advertised actions plus the `expanded` state. Scroll and menu-specific
+  routes remain blocked as described below.
 - Semantic `Component.scroll_to` was probed against deterministic GTK3 and GTK4
   scrolled fixtures on this development desktop. Both reported failure or an
   unknown outcome and did not make the target showing, so Deskpal does not

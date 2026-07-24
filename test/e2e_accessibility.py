@@ -443,6 +443,19 @@ def run_rich_suite(env):
         assert unavailable_indicator_text.get("isError") is True
         assert "indicator" in text(unavailable_indicator_text).lower()
         assert visible_text("Validation message") == ""
+        unavailable_indicator_range = client.tool(
+            "agent_semantic_replace_text_range",
+            {
+                "captureId": app_state["captureId"],
+                "target": app_state_entry["locator"],
+                "startOffset": 0,
+                "endOffset": 0,
+                "value": "must-not-insert",
+            },
+        )
+        assert unavailable_indicator_range.get("isError") is True
+        assert "indicator" in text(unavailable_indicator_range).lower()
+        assert visible_text("Validation message") == ""
         unavailable_indicator_value = client.tool(
             "agent_semantic_set_value",
             {
@@ -543,6 +556,52 @@ def run_rich_suite(env):
             },
         )
         assert restore_text_result.get("isError") is not True, restore_text_result
+        range_result = accessibility_payload(
+            client.tool(
+                "accessibility_action",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "target": {"role": "text", "name": "Validation message"},
+                    "operation": "replaceTextRange",
+                    "startOffset": 9,
+                    "endOffset": 15,
+                    "value": "range",
+                },
+            )
+        )
+        assert range_result["verified"] is True, range_result
+        assert range_result["actionApplied"] is True, range_result
+        assert range_result["verification"]["expectedTextDerived"] is True
+        assert "expectedText" not in range_result["verification"], range_result
+        assert visible_text("Validation message") == "semantic range value"
+        invalid_range = accessibility_payload(
+            client.tool(
+                "accessibility_action",
+                {
+                    "application": "accessibility_app.py",
+                    "window": TITLE,
+                    "target": {"role": "text", "name": "Validation message"},
+                    "operation": "replaceTextRange",
+                    "startOffset": 0,
+                    "endOffset": 999,
+                    "value": "invalid",
+                },
+            )
+        )
+        assert invalid_range["mutationIssued"] is False, invalid_range
+        assert invalid_range["errorCode"] == "text_range_invalid", invalid_range
+        restore_text_result = client.tool(
+            "accessibility_action",
+            {
+                "application": "accessibility_app.py",
+                "window": TITLE,
+                "target": {"role": "text", "name": "Validation message"},
+                "operation": "setText",
+                "value": "semantic action value",
+            },
+        )
+        assert accessibility_payload(restore_text_result)["verified"] is True
 
         set_value_result = client.tool(
             "accessibility_action",
@@ -671,6 +730,7 @@ def run_rich_suite(env):
                 },
                 "operation": "invoke",
                 "action": "click",
+                "timeoutMs": 3000,
                 "verify": {
                     "role": "label",
                     "name": "Fixture status",
@@ -696,6 +756,7 @@ def run_rich_suite(env):
                 },
                 "operation": "invoke",
                 "action": "click",
+                "timeoutMs": 3000,
                 "verify": {
                     "role": "label",
                     "name": "Fixture status",
@@ -1674,6 +1735,7 @@ def main():
                     "agent_semantic_set_text",
                     "agent_semantic_set_value",
                     "agent_semantic_select",
+                    "agent_semantic_replace_text_range",
                 ):
                     tool = tool_by_name(tools, name)
                     assert "sessionId" not in tool["inputSchema"]["properties"], tool
@@ -1744,16 +1806,27 @@ def main():
                 ]
                 assert select_schema["properties"]["value"]["type"] == "integer"
                 assert select_schema["properties"]["timeoutMs"]["default"] == 3000
+                range_schema = tool_by_name(
+                    tools, "agent_semantic_replace_text_range"
+                )["inputSchema"]
+                assert range_schema["required"] == [
+                    "captureId", "target", "startOffset", "endOffset", "value"
+                ]
+                assert range_schema["properties"]["startOffset"]["type"] == "integer"
+                assert range_schema["properties"]["timeoutMs"]["default"] == 3000
                 verify_conditions = action_schema["properties"]["verify"]["allOf"]
                 assert {
                     "busName", "objectPath", "processId"
                 }.issubset(verify_conditions[0]["then"]["required"])
                 operation_conditions = action_schema["allOf"]
                 assert "value" in operation_conditions[0]["then"]["required"]
-                assert "value" in operation_conditions[1]["then"]["required"]
+                assert {"value", "startOffset", "endOffset"}.issubset(
+                    operation_conditions[1]["then"]["required"]
+                )
                 assert "value" in operation_conditions[2]["then"]["required"]
+                assert "value" in operation_conditions[3]["then"]["required"]
                 assert {"action", "verify"}.issubset(
-                    operation_conditions[3]["then"]["required"]
+                    operation_conditions[4]["then"]["required"]
                 )
                 for nul_arguments in (
                     {
