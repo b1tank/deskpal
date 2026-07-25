@@ -11,6 +11,7 @@
 
 void sessions_init(void);
 void sessions_cleanup_all(void);
+int sessions_active_count(void);
 
 cJSON *sessions_forward_tool(const char *session_id, const char *tool_name,
                              const cJSON *arguments);

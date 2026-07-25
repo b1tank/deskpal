@@ -94,6 +94,7 @@ def run_suite():
             app_state_schema = tool_by_name(tools, "get_app_state")["inputSchema"]
             tool_by_name(tools, "agent_cursor_status")
             tool_by_name(tools, "agent_cursor_hide")
+            release_schema = tool_by_name(tools, "release_control")["inputSchema"]
             assert "maxWidth" in screenshot_schema["properties"]
             assert "maxHeight" in screenshot_schema["properties"]
             assert "includeAll" in list_schema["properties"]
@@ -101,6 +102,7 @@ def run_suite():
             assert cursor_move_schema["required"] == ["captureId", "x", "y"]
             assert cursor_move_schema["properties"]["x"]["type"] == "integer"
             assert "sessionId" in environment_schema["properties"]
+            assert "sessionId" not in release_schema["properties"]
             assert app_state_schema["properties"]["maxWidth"]["default"] == 1920
             assert app_state_schema["properties"]["includeOffscreen"]["default"] is False
             assert app_state_schema["properties"]["includeText"]["default"] is False
@@ -109,6 +111,7 @@ def run_suite():
             assert environment["scope"] == "visible-desktop", environment
             assert environment["displayServer"] == "x11", environment
             assert environment["sharedSeat"] is True, environment
+            assert environment["control"]["heldByThisProcess"] is False, environment
             assert environment["selectedBackends"]["pointer"] == "xtest", environment
             assert environment["capabilities"]["pointerInput"] == {
                 "available": True,
@@ -355,7 +358,6 @@ def run_suite():
                 {"captureId": capture_metadata["captureId"], "x": 320, "y": 200},
             )
             assert unavailable_move.get("isError") is True, unavailable_move
-            assert "indicator" in text(unavailable_move).lower(), unavailable_move
             next_capture = client.tool("screenshot", {"fullScreen": True})
             assert (
                 next_capture["screenshot"]["captureId"]
@@ -509,6 +511,12 @@ def run_suite():
             assert blocked.get("isError") is True, blocked
             assert "desktop control is already held" in text(blocked), blocked
 
+            blocked_cursor = second.tool(
+                "agent_cursor_hide", {"cursorId": "not-owned"}
+            )
+            assert blocked_cursor.get("isError") is True, blocked_cursor
+            assert "desktop control is already held" in text(blocked_cursor)
+
             blocked_exec = second.tool("exec", {"command": "true"})
             assert blocked_exec.get("isError") is True, blocked_exec
             assert "desktop control is already held" in text(blocked_exec)
@@ -541,7 +549,28 @@ def run_suite():
             assert scoped_launch.get("isError") is True, scoped_launch
             assert "desktop control is already held" in text(scoped_launch)
 
+            refused_release = json.loads(text(client.tool("release_control")))
+            assert refused_release["released"] is False, refused_release
+            assert refused_release["reason"] == "isolated_sessions_active"
             client.tool("close_isolated_session", {"sessionId": isolated_id})
+
+            client.tool("mouse_down", {"button": 1})
+            held_release = json.loads(text(client.tool("release_control")))
+            assert held_release["released"] is False, held_release
+            assert held_release["reason"] == "mouse_button_held"
+            client.tool("mouse_up", {"button": 1})
+            released = json.loads(text(client.tool("release_control")))
+            assert released["released"] is True, released
+            assert released["reason"] == "released"
+            assert client.proc.poll() is None
+
+            successor_focus = second.tool("focus_window", {"windowName": TITLE})
+            assert successor_focus.get("isError") is not True, successor_focus
+            successor_release = json.loads(text(second.tool("release_control")))
+            assert successor_release["released"] is True, successor_release
+            idempotent_release = json.loads(text(second.tool("release_control")))
+            assert idempotent_release["released"] is False, idempotent_release
+            assert idempotent_release["reason"] == "not_held"
 
             stress = text(
                 client.tool(

@@ -16,6 +16,7 @@
 #include "accessibility.h"
 #include "ocr.h"
 #include "sessions.h"
+#include "control.h"
 #include "uinput.h"
 #include <ctype.h>
 #include <errno.h>
@@ -1930,6 +1931,44 @@ cJSON *tool_agent_semantic_replace_text_range(const cJSON *params)
 		params, SEMANTIC_MUTATION_REPLACE_TEXT_RANGE);
 }
 
+/* ── control lease ───────────────────────────────────────────────────────── */
+
+cJSON *tool_release_control(const cJSON *params)
+{
+	(void)params;
+	cJSON *payload = cJSON_CreateObject();
+	int held_before = control_is_held();
+	cJSON_AddBoolToObject(payload, "heldBefore", held_before);
+	cJSON_AddBoolToObject(payload, "released", 0);
+	if (!held_before) {
+		cJSON_AddStringToObject(payload, "reason", "not_held");
+		return structured_text_result(payload, "control");
+	}
+	if (control_is_adopted()) {
+		cJSON_AddStringToObject(payload, "reason", "isolated_child");
+		return structured_text_result(payload, "control");
+	}
+	int active_sessions = sessions_active_count();
+	cJSON_AddNumberToObject(payload, "activeIsolatedSessions", active_sessions);
+	if (active_sessions > 0) {
+		cJSON_AddStringToObject(payload, "reason", "isolated_sessions_active");
+		return structured_text_result(payload, "control");
+	}
+	if (x11_input_is_held()) {
+		cJSON_AddStringToObject(payload, "reason", "mouse_button_held");
+		return structured_text_result(payload, "control");
+	}
+	char error[256] = {0};
+	if (control_release(error, sizeof(error)) != 0) {
+		cJSON_AddStringToObject(payload, "reason", "release_failed");
+		cJSON_AddStringToObject(payload, "error", error);
+		return structured_text_result(payload, "control");
+	}
+	cJSON_ReplaceItemInObject(payload, "released", cJSON_CreateBool(1));
+	cJSON_AddStringToObject(payload, "reason", "released");
+	return structured_text_result(payload, "control");
+}
+
 /* ── environment status ──────────────────────────────────────────────────── */
 
 static cJSON *environment_capability(int available, const char *backend,
@@ -1976,6 +2015,13 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	cJSON_AddStringToObject(payload, "scope", headless ? "isolated" : "visible-desktop");
 	cJSON_AddStringToObject(payload, "displayServer", wayland ? "wayland-xwayland" : "x11");
 	cJSON_AddBoolToObject(payload, "sharedSeat", !headless);
+	cJSON *control_status = cJSON_CreateObject();
+	cJSON_AddBoolToObject(control_status, "heldByThisProcess", control_is_held());
+	cJSON_AddBoolToObject(control_status, "inherited", control_is_adopted());
+	cJSON_AddNumberToObject(control_status, "activeIsolatedSessions",
+	                       sessions_active_count());
+	cJSON_AddBoolToObject(control_status, "mouseButtonHeld", x11_input_is_held());
+	cJSON_AddItemToObject(payload, "control", control_status);
 
 	const char *window_backend = wayland ? "x11-xwayland" : "x11";
 	const char *capture_backend = headless ? "x11" : "x11-with-host-fallback";
@@ -4039,6 +4085,14 @@ void tools_register_all(void)
 		"  \"properties\": {}"
 		"}",
 		tool_get_environment_status);
+
+	mcp_register_tool("release_control",
+		"Release this Deskpal process's visible-desktop control lease when no isolated session or mouse-button hold requires it. Pi calls this automatically after an agent run settles; other MCP clients may call it explicitly. Idempotent when no lease is held.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {}"
+		"}",
+		tool_release_control);
 
 	mcp_register_tool("get_app_state",
 		"Observe one exact X11/Xwayland app window without activating it. Returns an image, backend-scoped identity, focus and geometry consistency, image-to-stage transform, short-lived capture ID when stable, and bounded untrusted AT-SPI state. Native Wayland targets and ambiguous names fail closed.",

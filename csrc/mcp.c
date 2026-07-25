@@ -43,6 +43,7 @@ void mcp_register_tool(const char *name, const char *description,
 	g_schemas[g_tool_count] = schema;
 	if (strcmp(name, "launch_isolated_app") != 0 &&
 	    strcmp(name, "close_isolated_session") != 0 &&
+	    strcmp(name, "release_control") != 0 &&
 	    strcmp(name, "accessibility_status") != 0 &&
 	    strcmp(name, "get_accessibility_tree") != 0 &&
 	    strcmp(name, "get_focused_element") != 0 &&
@@ -685,6 +686,7 @@ static cJSON *handle_tools_call(const cJSON *params)
 	int session_routable =
 		strcmp(tool_name, "launch_isolated_app") != 0 &&
 		strcmp(tool_name, "close_isolated_session") != 0 &&
+		strcmp(tool_name, "release_control") != 0 &&
 		strcmp(tool_name, "accessibility_status") != 0 &&
 		strcmp(tool_name, "get_accessibility_tree") != 0 &&
 		strcmp(tool_name, "get_focused_element") != 0 &&
@@ -694,6 +696,9 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "agent_semantic_set_value") != 0 &&
 		strcmp(tool_name, "agent_semantic_select") != 0 &&
 		strcmp(tool_name, "agent_semantic_replace_text_range") != 0;
+	if (session_id && strcmp(tool_name, "release_control") == 0)
+		return mcp_tool_error_result(
+			"release_control applies only to the visible-desktop owner and does not accept sessionId");
 	if (session_id && !session_routable &&
 	    (strcmp(tool_name, "accessibility_status") == 0 ||
 	     strcmp(tool_name, "get_accessibility_tree") == 0 ||

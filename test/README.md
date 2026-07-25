@@ -10,7 +10,13 @@ npm test
 ```
 
 `npm test` runs entirely in nested/private X displays and must not manipulate
-the user's visible desktop:
+the user's visible desktop. `scripts/test-safe.sh` uses Bubblewrap to mount a
+private `/run/user/<uid>` for the production control-lock path, so unrelated
+live Pi sessions cannot block tests. All test Deskpal processes still arbitrate
+one shared lock inside that namespace, and inherited-descriptor validation is
+unchanged. Bubblewrap (`bwrap`) is therefore a safe-test dependency.
+
+The suites are:
 
 - `indicator_contract.py`: static GNOME extension syntax, narrow D-Bus surface,
   caller ownership hooks, click-through behavior, and absence of input APIs.
@@ -20,7 +26,8 @@ the user's visible desktop:
   capability/blocker reporting, exact capture-bound app-state observations,
   privacy-safe semantic revisions/diffs, screenshot scaling metadata,
   screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
-  controller lock contention/release, and isolated-operation independence.
+  controller lock contention, held-input/session release guards, persistent
+  successor acquisition, and isolated-operation independence.
 - `e2e_accessibility.py`: optional AT-SPI tool schemas, unavailable capability,
   bounded semantic tree output, filtering/truncation, logical bounds, actions,
   opt-in attributes/text, privacy redaction, completion metadata, and true

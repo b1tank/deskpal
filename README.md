@@ -165,7 +165,11 @@ DESKPAL_PI_ALLOW_EXEC=1 DESKPAL_PI_ALLOW_FS=1 pi -e ./extensions/deskpal.ts
 ```
 
 Use `/deskpal-status` to verify the bridge. The extension closes the server and
-its isolated sessions when the Pi session shuts down. Before choosing a desktop
+its isolated sessions when the Pi session shuts down. A visible-desktop control
+lease is acquired lazily by mutations and automatically released when the Pi
+agent run settles, so idle Pi sessions do not block each other. Non-Pi clients
+can call `release_control`; release is refused while an isolated session or
+Deskpal-held mouse button still depends on the lease. Before choosing a desktop
 interaction route, call `deskpal_get_environment_status` to inspect active
 backends, blockers, shared-seat risks, and concrete setup actions. Use
 `deskpal_get_app_state` with an exact `windowId` or `windowName` to obtain one

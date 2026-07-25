@@ -33,7 +33,11 @@ int control_tool_requires_lock(const char *tool_name)
 		"launch_isolated_app",
 		"type_text", "key_press", "resize_window", "mouse_move",
 		"scroll", "drag", "mouse_down", "mouse_up", "set_clipboard",
-		"hover_text", "accessibility_action", "exec", NULL
+		"hover_text", "accessibility_action",
+		"agent_cursor_move", "agent_cursor_hide",
+		"agent_semantic_press", "agent_semantic_set_text",
+		"agent_semantic_set_value", "agent_semantic_select",
+		"agent_semantic_replace_text_range", "exec", NULL
 	};
 
 	for (int i = 0; mutating_tools[i]; i++) {
@@ -191,6 +195,42 @@ int control_acquire(char *error, size_t error_len)
 	}
 
 	g_control_fd = fd;
+	g_control_fd_adopted = 0;
+	return 0;
+}
+
+int control_is_held(void)
+{
+	return g_control_fd >= 0;
+}
+
+int control_is_adopted(void)
+{
+	return g_control_fd_adopted;
+}
+
+int control_release(char *error, size_t error_len)
+{
+	if (g_control_fd < 0) return 0;
+	if (g_control_fd_adopted) {
+		snprintf(error, error_len,
+		         "isolated child cannot release inherited desktop control");
+		return -1;
+	}
+	/* Clear our owner text while still holding the lock. Clearing it after
+	 * unlock could race and erase the next owner's metadata. */
+	if (ftruncate(g_control_fd, 0) != 0) {
+		snprintf(error, error_len, "could not clear desktop control owner: %s",
+		         strerror(errno));
+		return -1;
+	}
+	if (flock(g_control_fd, LOCK_UN) != 0) {
+		snprintf(error, error_len, "could not release desktop control: %s",
+		         strerror(errno));
+		return -1;
+	}
+	close(g_control_fd);
+	g_control_fd = -1;
 	g_control_fd_adopted = 0;
 	return 0;
 }

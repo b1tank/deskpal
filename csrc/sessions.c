@@ -514,6 +514,14 @@ void sessions_init(void)
 		g_sigpipe_handler_installed = 1;
 }
 
+int sessions_active_count(void)
+{
+	int count = 0;
+	for (int i = 0; i < MAX_ISOLATED_SESSIONS; i++)
+		if (g_sessions[i].used) count++;
+	return count;
+}
+
 void sessions_cleanup_all(void)
 {
 	for (int i = 0; i < MAX_ISOLATED_SESSIONS; i++)

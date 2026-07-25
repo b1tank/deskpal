@@ -105,6 +105,8 @@ broker actions will drive.
       above, including truthful side-effect reporting and shutdown cleanup.
 - [x] Add `get_environment_status`: capabilities, selected backends, blockers,
       shared-seat risks, and concrete setup actions.
+- [x] Release Pi's visible-desktop control lease when an agent run settles;
+      refuse release while isolated sessions or held mouse input depend on it.
 - [x] Add unified [`get_app_state`](app-state.md): image, compact semantic state,
       focus, app/surface identity, scale transform, and capture ID.
 - [ ] Expand verified semantic press, selection, value, text-range, scroll,

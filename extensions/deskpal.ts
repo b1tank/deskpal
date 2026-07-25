@@ -265,6 +265,22 @@ export default function deskpalExtension(pi: ExtensionAPI) {
 		}
 	});
 
+	pi.on("agent_settled", async (_event, ctx) => {
+		if (!bridge?.running) return;
+		try {
+			const result = await bridge.callTool("release_control", {});
+			const control = result.control as
+				| { released?: boolean; reason?: string }
+				| undefined;
+			if (control?.released) ctx.ui.setStatus("deskpal-control", undefined);
+			else if (control?.reason === "isolated_sessions_active" ||
+			         control?.reason === "mouse_button_held")
+				ctx.ui.setStatus("deskpal-control", `deskpal control: ${control.reason}`);
+		} catch {
+			// The bridge may be exiting or an older binary may not expose the tool.
+		}
+	});
+
 	pi.on("session_shutdown", async () => {
 		await bridge?.stop();
 		bridge = undefined;

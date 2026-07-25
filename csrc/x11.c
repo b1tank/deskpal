@@ -20,6 +20,7 @@
 #include <X11/Xutil.h>
 
 xdo_t *g_xdo = NULL;  /* non-static: also used by screenshot.c */
+static unsigned int g_held_mouse_buttons;
 
 static int deskpal_x_error_handler(Display *display, XErrorEvent *event)
 {
@@ -68,6 +69,7 @@ int x11_init(int enable_uinput)
 
 void x11_cleanup(void)
 {
+	g_held_mouse_buttons = 0;
 	uinput_cleanup();
 	if (g_xdo) {
 		xdo_free(g_xdo);
@@ -664,16 +666,27 @@ int x11_drag(int x1, int y1, int x2, int y2, int button, int steps)
 
 int x11_mouse_down(int button)
 {
-	if (uinput_available())
-		return uinput_mouse_down(button);
-	return xdo_mouse_down(g_xdo, CURRENTWINDOW, button);
+	int result = uinput_available()
+		? uinput_mouse_down(button)
+		: xdo_mouse_down(g_xdo, CURRENTWINDOW, button);
+	if (result == 0 && button >= 1 && button <= 31)
+		g_held_mouse_buttons |= 1U << button;
+	return result;
 }
 
 int x11_mouse_up(int button)
 {
-	if (uinput_available())
-		return uinput_mouse_up(button);
-	return xdo_mouse_up(g_xdo, CURRENTWINDOW, button);
+	int result = uinput_available()
+		? uinput_mouse_up(button)
+		: xdo_mouse_up(g_xdo, CURRENTWINDOW, button);
+	if (result == 0 && button >= 1 && button <= 31)
+		g_held_mouse_buttons &= ~(1U << button);
+	return result;
+}
+
+int x11_input_is_held(void)
+{
+	return g_held_mouse_buttons != 0;
 }
 
 /* ── Display info ─────────────────────────────────────────────────────────── */

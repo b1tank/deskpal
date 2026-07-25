@@ -12,6 +12,7 @@ JS = EXTENSION / "extension.js"
 METADATA = EXTENSION / "metadata.json"
 STYLESHEET = EXTENSION / "stylesheet.css"
 SCRIPT = ROOT / "scripts" / "indicator.sh"
+PI_EXTENSION = ROOT / "extensions" / "deskpal.ts"
 
 
 def require(condition, message):
@@ -24,6 +25,7 @@ def main():
     source = JS.read_text()
     stylesheet = STYLESHEET.read_text()
     script = SCRIPT.read_text()
+    pi_extension = PI_EXTENSION.read_text()
 
     require(metadata["uuid"] == "indicator@deskpal.local", "unexpected UUID")
     require("42" in metadata["shell-version"], "GNOME 42 must be supported")
@@ -56,6 +58,8 @@ def main():
     require("deskpal-agent-cursor-pointer" in stylesheet, "missing pointer style")
     require("gdbus call --session" in script, "demo must use the session bus")
     require("xdotool" not in script and "ydotool" not in script, "demo must not move input")
+    require('pi.on("agent_settled"' in pi_extension, "Pi must release idle control")
+    require('callTool("release_control"' in pi_extension, "Pi release hook must call Deskpal")
 
     subprocess.run(["node", "--check", str(JS)], check=True)
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)

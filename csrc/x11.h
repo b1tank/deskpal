@@ -116,6 +116,9 @@ int x11_drag(int x1, int y1, int x2, int y2, int button, int steps);
 int x11_mouse_down(int button);
 int x11_mouse_up(int button);
 
+/* True while a mouse button pressed by Deskpal has not been released. */
+int x11_input_is_held(void);
+
 /* Scroll: button 4=up, 5=down. */
 int x11_scroll(int button, int clicks);
 
