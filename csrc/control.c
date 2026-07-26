@@ -238,8 +238,12 @@ int control_release(char *error, size_t error_len)
 void control_cleanup(void)
 {
 	if (g_control_fd < 0) return;
-	if (!g_control_fd_adopted)
+	if (!g_control_fd_adopted) {
+		char ignored[1];
+		if (control_release(ignored, sizeof(ignored)) == 0) return;
+		/* Shutdown must not retain the kernel lock if metadata cleanup fails. */
 		flock(g_control_fd, LOCK_UN);
+	}
 	close(g_control_fd);
 	g_control_fd = -1;
 	g_control_fd_adopted = 0;
