@@ -78,13 +78,19 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int source_width, int source_height,
                           int image_width, int image_height,
                           const char *semantic_revision,
+                          const SemanticWindowIdentity *semantic_window,
                           const char *semantic_snapshot,
                           int semantic_complete,
+                          int semantic_max_depth,
+                          int semantic_max_nodes,
+                          int semantic_include_offscreen,
                           DeskpalCapture *capture)
 {
 	if (window_id == 0 || process_id <= 0 || !title || !title[0] ||
 	    !app_class || !app_class[0] || window_width <= 0 || window_height <= 0 ||
-	    !semantic_revision || !semantic_snapshot)
+	    !semantic_revision || !semantic_snapshot || semantic_max_depth < 1 ||
+	    semantic_max_depth > 8 || semantic_max_nodes < 1 ||
+	    semantic_max_nodes > 300)
 		return -1;
 	DeskpalCapture next = {
 		.target = DESKPAL_CAPTURE_WINDOW,
@@ -103,17 +109,33 @@ int captures_store_window(unsigned long window_id, long process_id,
 	int class_written = snprintf(next.app_class, sizeof(next.app_class), "%s", app_class);
 	int revision_written = snprintf(next.semantic_revision,
 		sizeof(next.semantic_revision), "%s", semantic_revision);
+	int bus_written = snprintf(next.semantic_window.bus_name,
+		sizeof(next.semantic_window.bus_name), "%s",
+		semantic_window ? semantic_window->bus_name : "");
+	int path_written = snprintf(next.semantic_window.window_object_path,
+		sizeof(next.semantic_window.window_object_path), "%s",
+		semantic_window ? semantic_window->window_object_path : "");
+	next.semantic_window.process_id = semantic_window
+		? semantic_window->process_id : 0;
 	char *snapshot_copy = strdup(semantic_snapshot);
 	if (title_written < 0 || (size_t)title_written >= sizeof(next.title) ||
 	    class_written < 0 || (size_t)class_written >= sizeof(next.app_class) ||
 	    revision_written < 0 ||
 	    (size_t)revision_written >= sizeof(next.semantic_revision) ||
+	    bus_written < 0 ||
+	    (size_t)bus_written >= sizeof(next.semantic_window.bus_name) ||
+	    path_written < 0 ||
+	    (size_t)path_written >=
+	        sizeof(next.semantic_window.window_object_path) ||
 	    !snapshot_copy) {
 		free(snapshot_copy);
 		return -1;
 	}
 	next.semantic_snapshot = snapshot_copy;
 	next.semantic_complete = semantic_complete;
+	next.semantic_max_depth = semantic_max_depth;
+	next.semantic_max_nodes = semantic_max_nodes;
+	next.semantic_include_offscreen = semantic_include_offscreen;
 	if (store_capture(&next, capture) != 0) {
 		free(snapshot_copy);
 		return -1;

@@ -13,6 +13,7 @@
 #include "screenshot.h"
 #include "captures.h"
 #include "semantic_state.h"
+#include "semantic_change.h"
 #include "indicator.h"
 #include "accessibility.h"
 #include "ocr.h"
@@ -889,8 +890,11 @@ cJSON *tool_get_app_state(const cJSON *params)
 	                                   image.source_width, image.source_height,
 	                                   image.image_width, image.image_height,
 	                                   semantic_snapshot.revision,
+	                                   &semantic_snapshot.window_identity,
 	                                   semantic_snapshot.json,
-	                                   semantic_snapshot.complete, &capture) != 0) {
+	                                   semantic_snapshot.complete,
+	                                   max_depth, max_nodes, include_offscreen,
+	                                   &capture) != 0) {
 		free(image.png);
 		semantic_state_clear(&semantic_snapshot);
 		cJSON_Delete(diff);
@@ -1132,6 +1136,130 @@ static int window_capture_still_valid(const DeskpalCapture *capture)
 	       current.x == capture->window_x && current.y == capture->window_y &&
 	       current.width == capture->window_width &&
 	       current.height == capture->window_height;
+}
+
+static int validate_semantic_change_target(
+	const DeskpalCapture *base, void *data, char *error, size_t error_len)
+{
+	(void)data;
+	if (window_capture_still_valid(base)) return 0;
+	snprintf(error, error_len,
+	         "Captured X11 target was replaced or its geometry changed");
+	return -1;
+}
+
+static int observe_semantic_change_target(
+	const DeskpalCapture *base, void *data, SemanticStateSnapshot *snapshot,
+	char *error, size_t error_len)
+{
+	(void)data;
+	cJSON *semantic = accessibility_tree_exact(
+		NULL, base->title, base->semantic_max_depth,
+		base->semantic_max_nodes, base->semantic_include_offscreen, 0, 0);
+	if (!semantic) {
+		snprintf(error, error_len, "Could not refresh semantic state");
+		return -1;
+	}
+	filter_semantic_process(semantic, base->process_id);
+	int exact = cJSON_IsTrue(cJSON_GetObjectItem(semantic, "available")) &&
+		cJSON_IsTrue(cJSON_GetObjectItem(semantic, "targetProcessMatched")) &&
+		cJSON_IsTrue(cJSON_GetObjectItem(semantic, "targetWindowMatched"));
+	int rc = exact ? semantic_state_build(semantic, snapshot) : -1;
+	cJSON_Delete(semantic);
+	if (rc == 0) return 0;
+	snprintf(error, error_len,
+	         "Exact semantic window could not be re-observed safely");
+	return -1;
+}
+
+static int semantic_change_cancelled(void *data)
+{
+	(void)data;
+	return mcp_request_cancelled();
+}
+
+static cJSON *semantic_event_stats_json(const SemanticEventStats *stats)
+{
+	cJSON *json = cJSON_CreateObject();
+	cJSON_AddBoolToObject(json, "registered", stats->registered);
+	cJSON_AddBoolToObject(json, "deregistered", stats->deregistered);
+	cJSON_AddNumberToObject(json, "waitCount", stats->wait_count);
+	cJSON_AddNumberToObject(json, "eventCount", stats->event_count);
+	cJSON_AddNumberToObject(json, "relevantEventCount",
+	                       stats->relevant_event_count);
+	cJSON_AddNumberToObject(json, "irrelevantEventCount",
+	                       stats->irrelevant_event_count);
+	cJSON_AddNumberToObject(json, "coalescedEventCount",
+	                       stats->coalesced_event_count);
+	cJSON_AddNumberToObject(json, "droppedEventCount",
+	                       stats->dropped_event_count);
+	cJSON_AddBoolToObject(json, "overflow", stats->overflow);
+	return json;
+}
+
+cJSON *tool_wait_for_semantic_change(const cJSON *params)
+{
+	const char *capture_id = json_str(params, "captureId", NULL);
+	int timeout_ms = json_int(params, "timeoutMs", 5000);
+	DeskpalCapture base = {0};
+	int lookup = captures_lookup(capture_id, &base);
+	if (lookup == -2)
+		return mcp_tool_error_result(
+			"captureId is stale; take a fresh get_app_state observation");
+	if (lookup != 0 || base.target != DESKPAL_CAPTURE_WINDOW ||
+	    !base.semantic_snapshot)
+		return mcp_tool_error_result(
+			"captureId must identify a retained stable get_app_state observation");
+	if (!base.semantic_window.process_id || !base.semantic_window.bus_name[0] ||
+	    !base.semantic_window.window_object_path[0])
+		return mcp_tool_error_result(
+			"Capture has no exact semantic window identity to observe");
+
+	long long started_ms = semantic_events_monotonic_ms();
+	SemanticChangeResult change = {0};
+	int rc = semantic_change_wait(
+		&base, started_ms + timeout_ms,
+		validate_semantic_change_target, observe_semantic_change_target, NULL,
+		semantic_change_cancelled, NULL, &change);
+
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "baseCaptureId", base.id);
+	cJSON_AddBoolToObject(payload, "untrustedContent", 1);
+	cJSON_AddStringToObject(payload, "contentWarning",
+		"Semantic diff roles, paths, states, actions, bounds, values, and selection metadata are application-controlled.");
+	const char *status = change.status == SEMANTIC_CHANGE_CHANGED ? "changed" :
+		change.status == SEMANTIC_CHANGE_TIMEOUT ? "timeout" :
+		change.status == SEMANTIC_CHANGE_CANCELLED ? "cancelled" : "error";
+	cJSON_AddStringToObject(payload, "status", status);
+	cJSON_AddBoolToObject(payload, "changed",
+	                     change.status == SEMANTIC_CHANGE_CHANGED);
+	cJSON_AddBoolToObject(payload, "timedOut",
+	                     change.status == SEMANTIC_CHANGE_TIMEOUT);
+	cJSON_AddBoolToObject(payload, "cancelled",
+	                     change.status == SEMANTIC_CHANGE_CANCELLED);
+	cJSON_AddNumberToObject(payload, "timeoutMs", timeout_ms);
+	cJSON_AddNumberToObject(payload, "elapsedMs",
+	                       semantic_events_monotonic_ms() - started_ms);
+	cJSON_AddItemToObject(payload, "events",
+	                     semantic_event_stats_json(&change.events));
+	if (change.status == SEMANTIC_CHANGE_CHANGED) {
+		cJSON_AddStringToObject(payload, "baseRevision", base.semantic_revision);
+		cJSON_AddStringToObject(payload, "currentRevision",
+		                      change.current.revision);
+		cJSON_AddItemToObject(payload, "semanticDiff", change.diff);
+		change.diff = NULL;
+	}
+	if (change.error[0]) cJSON_AddStringToObject(payload, "error", change.error);
+	cJSON_AddBoolToObject(payload, "inputDelivered", 0);
+	cJSON_AddBoolToObject(payload, "sharedPointerMoved", 0);
+	cJSON_AddBoolToObject(payload, "focusChanged", 0);
+	cJSON_AddBoolToObject(payload, "stackingChanged", 0);
+	cJSON_AddBoolToObject(payload, "clipboardChanged", 0);
+	cJSON *result = structured_text_result(payload, "semanticChange");
+	if (rc < 0 || change.status == SEMANTIC_CHANGE_CANCELLED)
+		cJSON_AddBoolToObject(result, "isError", 1);
+	semantic_change_result_clear(&change);
+	return result;
 }
 
 cJSON *tool_agent_cursor_move(const cJSON *params)
@@ -1772,7 +1900,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	int indicator_available = indicator_status != NULL;
 	int indicator_single_monitor = indicator_available &&
 		indicator_has_single_full_stage_monitor(indicator_status);
-	int semantic_press_available = !headless && semantic_available &&
+	int semantic_wait_available = !headless && semantic_available;
+	int semantic_press_available = semantic_wait_available &&
 		indicator_single_monitor;
 
 	cJSON *payload = cJSON_CreateObject();
@@ -1800,6 +1929,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                      keyboard_uinput ? "uinput-and-xtest" : "xtest");
 	cJSON_AddStringToObject(backends, "indicator",
 	                      indicator_available ? "gnome-shell-dbus" : "unavailable");
+	cJSON_AddStringToObject(backends, "semanticChangeWait",
+	                      semantic_wait_available ? "atspi-events" : "unavailable");
 	cJSON_AddStringToObject(backends, "semanticPress",
 	                      semantic_press_available ? "atspi-with-agent-cursor" : "unavailable");
 	cJSON_AddStringToObject(backends, "semanticSetText",
@@ -1833,6 +1964,10 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                     environment_capability(indicator_available,
 	                         indicator_available ? "gnome-shell-dbus" : "unavailable",
 	                         0, indicator_available));
+	cJSON_AddItemToObject(capabilities, "semanticChangeWait",
+	                     environment_capability(semantic_wait_available,
+	                         semantic_wait_available ? "atspi-events" : "unavailable",
+	                         0, 0));
 	cJSON_AddItemToObject(capabilities, "semanticPress",
 	                     environment_capability(semantic_press_available,
 	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
@@ -3123,12 +3258,14 @@ cJSON *tool_wait_for_window(const cJSON *params)
 	int elapsed = 0;
 
 	while (elapsed < deadline_ms) {
+		if (mcp_request_cancelled())
+			return mcp_tool_error_result("wait_for_window request was cancelled");
 		unsigned long wid = x11_find_window(name);
 		if (wid) {
 			WindowInfo info;
 			if (x11_get_window_info(wid, &info) != 0 || !info.viewable) {
-				usleep_ms(500);
-				elapsed += 500;
+				usleep_ms(50);
+				elapsed += 50;
 				continue;
 			}
 			char buf[512];
@@ -3137,8 +3274,8 @@ cJSON *tool_wait_for_window(const cJSON *params)
 				info.id, info.title, info.width, info.height);
 			return mcp_text_result(buf);
 		}
-		usleep_ms(500);
-		elapsed += 500;
+		usleep_ms(50);
+		elapsed += 50;
 	}
 
 	char buf[128];
@@ -3877,6 +4014,18 @@ void tools_register_all(void)
 		"  \"oneOf\": [{\"required\": [\"windowId\"]}, {\"required\": [\"windowName\"]}]"
 		"}",
 		tool_get_app_state);
+
+	mcp_register_tool("wait_for_semantic_change",
+		"Wait under one temporary AT-SPI listener for a canonical semantic revision change from a retained stable get_app_state capture. Revalidates exact X11 and accessible-window identity, returns a bounded diff, and supports MCP cancellation without pointer, focus, stacking, or clipboard mutation.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 5000}"
+		"  },"
+		"  \"required\": [\"captureId\"]"
+		"}",
+		tool_wait_for_semantic_change);
 
 	mcp_register_tool("agent_cursor_status",
 		"Report GNOME logical-cursor availability, stage and monitor geometry, and only the cursors owned by this Deskpal process. Indicator state is visual metadata, not proof of delivered input.",

@@ -103,10 +103,49 @@ static int compare_records(const void *left, const void *right)
 	              ((const SemanticRecord *)right)->key);
 }
 
+static void capture_window_identity(const cJSON *semantic,
+                                    SemanticStateSnapshot *snapshot)
+{
+	const cJSON *applications = cJSON_GetObjectItem(semantic, "applications");
+	const cJSON *application = cJSON_IsArray(applications) &&
+		cJSON_GetArraySize(applications) == 1
+		? cJSON_GetArrayItem(applications, 0) : NULL;
+	const cJSON *windows = application
+		? cJSON_GetObjectItem(application, "windows") : NULL;
+	const cJSON *window = cJSON_IsArray(windows) &&
+		cJSON_GetArraySize(windows) == 1 ? cJSON_GetArrayItem(windows, 0) : NULL;
+	const cJSON *nodes = window ? cJSON_GetObjectItem(window, "nodes") : NULL;
+	const cJSON *root = cJSON_IsArray(nodes) && cJSON_GetArraySize(nodes) > 0
+		? cJSON_GetArrayItem(nodes, 0) : NULL;
+	const cJSON *path = root ? cJSON_GetObjectItem(root, "path") : NULL;
+	const cJSON *locator = root ? cJSON_GetObjectItem(root, "locator") : NULL;
+	const cJSON *bus = locator ? cJSON_GetObjectItem(locator, "busName") : NULL;
+	const cJSON *object = locator
+		? cJSON_GetObjectItem(locator, "objectPath") : NULL;
+	const cJSON *pid = locator ? cJSON_GetObjectItem(locator, "processId") : NULL;
+	if (!cJSON_IsArray(path) || cJSON_GetArraySize(path) != 0 ||
+	    !cJSON_IsString(bus) || !cJSON_IsString(object) ||
+	    !cJSON_IsNumber(pid) || pid->valuedouble < 1 ||
+	    pid->valuedouble > UINT32_MAX || pid->valuedouble != pid->valueint ||
+	    strlen(bus->valuestring) >=
+	        sizeof(snapshot->window_identity.bus_name) ||
+	    strlen(object->valuestring) >=
+	        sizeof(snapshot->window_identity.window_object_path))
+		return;
+	snprintf(snapshot->window_identity.bus_name,
+	         sizeof(snapshot->window_identity.bus_name), "%s",
+	         bus->valuestring);
+	snprintf(snapshot->window_identity.window_object_path,
+	         sizeof(snapshot->window_identity.window_object_path), "%s",
+	         object->valuestring);
+	snapshot->window_identity.process_id = (unsigned int)pid->valuedouble;
+}
+
 int semantic_state_build(const cJSON *semantic, SemanticStateSnapshot *snapshot)
 {
 	if (!semantic || !snapshot) return -1;
 	memset(snapshot, 0, sizeof(*snapshot));
+	capture_window_identity(semantic, snapshot);
 	SemanticRecord records[SEMANTIC_RECORD_LIMIT] = {0};
 	int count = 0;
 	int truncated = cJSON_IsTrue(cJSON_GetObjectItem(semantic, "truncated")) ||

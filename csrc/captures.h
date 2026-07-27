@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+#include "semantic_identity.h"
+
 #define DESKPAL_CAPTURE_ID_LEN 64
 #define DESKPAL_SEMANTIC_REVISION_LEN 32
 
@@ -33,8 +35,12 @@ typedef struct {
 	int image_width;
 	int image_height;
 	char semantic_revision[DESKPAL_SEMANTIC_REVISION_LEN];
+	SemanticWindowIdentity semantic_window;
 	char *semantic_snapshot;
 	int semantic_complete;
+	int semantic_max_depth;
+	int semantic_max_nodes;
+	int semantic_include_offscreen;
 	int64_t created_monotonic_ms;
 } DeskpalCapture;
 
@@ -51,8 +57,12 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int source_width, int source_height,
                           int image_width, int image_height,
                           const char *semantic_revision,
+                          const SemanticWindowIdentity *semantic_window,
                           const char *semantic_snapshot,
                           int semantic_complete,
+                          int semantic_max_depth,
+                          int semantic_max_nodes,
+                          int semantic_include_offscreen,
                           DeskpalCapture *capture);
 
 /* Resolve an ID from this process's bounded history. Returns -2 if expired. */

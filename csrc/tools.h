@@ -18,6 +18,7 @@ cJSON *tool_screenshot(const cJSON *params);
 cJSON *tool_get_environment_status(const cJSON *params);
 cJSON *tool_release_control(const cJSON *params);
 cJSON *tool_get_app_state(const cJSON *params);
+cJSON *tool_wait_for_semantic_change(const cJSON *params);
 cJSON *tool_agent_cursor_status(const cJSON *params);
 cJSON *tool_agent_cursor_move(const cJSON *params);
 cJSON *tool_agent_cursor_hide(const cJSON *params);

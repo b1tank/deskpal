@@ -107,6 +107,53 @@ def run_suite():
             assert app_state_schema["properties"]["includeOffscreen"]["default"] is False
             assert app_state_schema["properties"]["includeText"]["default"] is False
 
+            cancel_started = time.monotonic()
+            cancelled_id = client.send_request(
+                "tools/call",
+                {
+                    "name": "wait_for_window",
+                    "arguments": {
+                        "name": "Deskpal cancellation target that does not exist",
+                        "timeout": 5,
+                    },
+                },
+            )
+            queued_id = client.send_request("tools/list", {})
+            client.notify(
+                "notifications/cancelled",
+                {"requestId": cancelled_id, "reason": "deterministic test"},
+            )
+            cancelled_response = client.read_response()
+            assert cancelled_response["id"] == cancelled_id, cancelled_response
+            cancelled_result = cancelled_response["result"]
+            assert cancelled_result.get("isError") is True, cancelled_result
+            assert "cancelled" in text(cancelled_result), cancelled_result
+            assert time.monotonic() - cancel_started < 1, cancelled_response
+            queued_response = client.read_response()
+            assert queued_response["id"] == queued_id, queued_response
+            assert queued_response["result"]["tools"], queued_response
+
+            disconnect_client = DeskpalClient(
+                env, args=["--no-uinput"], name="e2e-disconnect-cancel"
+            )
+            disconnect_id = disconnect_client.send_request(
+                "tools/call",
+                {
+                    "name": "wait_for_window",
+                    "arguments": {
+                        "name": "Deskpal disconnected target that does not exist",
+                        "timeout": 5,
+                    },
+                },
+            )
+            disconnect_client.proc.stdin.close()
+            disconnect_response = disconnect_client.read_response()
+            assert disconnect_response["id"] == disconnect_id, disconnect_response
+            assert disconnect_response["result"].get("isError") is True
+            disconnect_client.proc.wait(timeout=2)
+            assert disconnect_client.proc.returncode == 0
+            disconnect_client.proc.stderr.read()
+
             environment = json.loads(text(client.tool("get_environment_status")))
             assert environment["scope"] == "visible-desktop", environment
             assert environment["displayServer"] == "x11", environment
@@ -119,6 +166,7 @@ def run_suite():
                 "sharedSeat": True,
                 "nonInterfering": False,
             }, environment
+            assert environment["capabilities"]["semanticChangeWait"]["available"] is False
             assert environment["capabilities"]["semanticPress"]["available"] is False
             assert environment["capabilities"]["semanticSetText"]["available"] is False
             assert environment["capabilities"]["semanticSetValue"]["available"] is False

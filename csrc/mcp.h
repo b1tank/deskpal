@@ -15,6 +15,10 @@
 /* Run the MCP stdio loop. Blocks until stdin closes. */
 int mcp_run(void);
 
+/* Pump bounded transport input while a synchronous handler is running. Returns
+ * true when its JSON-RPC request was cancelled or the client disconnected. */
+int mcp_request_cancelled(void);
+
 /* ── Response helpers ─────────────────────────────────────────────────────── */
 
 /* Build a text content response for a tool call. Caller owns result. */

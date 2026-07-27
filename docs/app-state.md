@@ -84,7 +84,8 @@ revalidates it afterward.
   but `consistency.stable` is false,
   `retryRecommended` is true, and no reusable capture ID is issued.
 - Stable observations register the capture ID with target identity, geometry,
-  source/image dimensions, and creation time.
+  source/image dimensions, creation time, and the bounded semantic window
+  bus/object identity when a complete root locator is available.
 - Unknown, stale, evicted, replaced, or geometry-mismatched capture IDs fail
   before any later mutation.
 
@@ -100,7 +101,10 @@ stageY  = windowY + sourceY
 
 A stable window `captureId` can be passed directly to `agent_cursor_move`; that
 tool revalidates the recorded identity and geometry before resolving the image
-point through this transform.
+point through this transform. When the capture retained an exact semantic root,
+it can also be passed to `wait_for_semantic_change`, which preserves the original
+semantic depth/node/offscreen bounds and returns only after a canonical revision
+change, timeout, or cancellation.
 
 The first implementation supports one monitor covering the full GNOME stage.
 Other layouts return a structured unsupported result until per-monitor capture

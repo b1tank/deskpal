@@ -11,6 +11,7 @@
 typedef struct {
 	char *json;
 	char revision[DESKPAL_SEMANTIC_REVISION_LEN];
+	SemanticWindowIdentity window_identity;
 	int complete;
 } SemanticStateSnapshot;
 

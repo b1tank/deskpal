@@ -18,20 +18,28 @@ unchanged. Bubblewrap (`bwrap`) is therefore a safe-test dependency.
 
 The suites are:
 
+- `test:extension`: Node syntax-check of the Pi bridge, including graceful MCP
+  cancellation and its bounded process-termination fallback.
 - `indicator_contract.py`: static GNOME extension syntax, narrow D-Bus surface,
   caller ownership hooks, click-through behavior, and absence of input APIs.
 - `e2e_isolation.py`: parent/child routing, Xvfb lifecycle, cleanup, malformed
   session IDs, missing-window safety, OCR, screenshots, and binary replacement.
 - `e2e_computer_use.py`: deterministic Tk workflow for app identity, environment
-  capability/blocker reporting, exact capture-bound app-state observations,
+  capability/blocker reporting, transport cancellation with queued-request
+  preservation and disconnect exit, exact capture-bound app-state observations,
   privacy-safe semantic revisions/diffs, screenshot scaling metadata,
   screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
   controller lock contention, held-input/session release guards, persistent
   successor acquisition, and isolated-operation independence.
 - `e2e_accessibility.py`: optional AT-SPI tool schemas, unavailable capability,
   bounded semantic tree output, filtering/truncation, logical bounds, actions,
-  opt-in attributes/text, privacy redaction, completion metadata, and true
-  focused-element lookup. It also covers exact app-state semantic filtering,
+  opt-in attributes/text, privacy redaction, completion metadata, true focused-
+  element lookup, and bounded temporary listener registration, exact-window
+  filtering, GLib dispatch, callback cancellation, timeout, accounting,
+  deregistration, exact X11 revalidation, geometry-replacement refusal,
+  post-event canonical revision/bounded-diff verification, public semantic waits,
+  MCP cancellation, stdin-disconnect cleanup, and forced-process cleanup.
+  It also covers exact app-state semantic filtering,
   privacy opt-ins, unstable geometry, target replacement, verified semantic text/focus/invoke
   mutations, path and role/name resolution, ambiguity, verification timeout,
   unknown outcomes, same-path/interleaving replacement, DEFUNCT verifier

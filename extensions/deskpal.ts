@@ -30,6 +30,7 @@ type PendingRequest = {
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const CANCEL_FALLBACK_MS = 750;
 const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
 const DEFAULT_BINARY = fileURLToPath(new URL("../build/deskpal", import.meta.url));
 
@@ -51,6 +52,7 @@ function resultText(result: McpToolResult): string {
 class DeskpalBridge {
 	private readonly child: ChildProcessWithoutNullStreams;
 	private readonly pending = new Map<number, PendingRequest>();
+	private readonly cancelFallbacks = new Map<number, NodeJS.Timeout>();
 	private stdoutBuffer = "";
 	private stdoutBytes = 0;
 	private nextId = 1;
@@ -148,7 +150,15 @@ class DeskpalBridge {
 				const abort = () => {
 					this.pending.delete(id);
 					clearTimeout(timer);
-					this.child.kill("SIGTERM");
+					this.notify("notifications/cancelled", {
+						requestId: id,
+						reason: "Pi tool call aborted",
+					});
+					const fallback = setTimeout(() => {
+						this.cancelFallbacks.delete(id);
+						if (this.running) this.child.kill("SIGTERM");
+					}, CANCEL_FALLBACK_MS);
+					this.cancelFallbacks.set(id, fallback);
 					reject(new Error("Deskpal request cancelled"));
 				};
 				signal.addEventListener("abort", abort, { once: true });
@@ -190,6 +200,11 @@ class DeskpalBridge {
 			return;
 		}
 		if (typeof response.id !== "number") return;
+		const cancelFallback = this.cancelFallbacks.get(response.id);
+		if (cancelFallback) {
+			clearTimeout(cancelFallback);
+			this.cancelFallbacks.delete(response.id);
+		}
 		const pending = this.pending.get(response.id);
 		if (!pending) return;
 		this.pending.delete(response.id);
@@ -201,6 +216,8 @@ class DeskpalBridge {
 	}
 
 	private rejectAll(error: Error): void {
+		for (const fallback of this.cancelFallbacks.values()) clearTimeout(fallback);
+		this.cancelFallbacks.clear();
 		for (const pending of this.pending.values()) {
 			clearTimeout(pending.timer);
 			pending.removeAbort?.();

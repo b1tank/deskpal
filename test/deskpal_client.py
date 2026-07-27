@@ -36,7 +36,7 @@ class DeskpalClient:
         )
         self.notify("notifications/initialized")
 
-    def call(self, method, params):
+    def send_request(self, method, params):
         self.request_id += 1
         request = {
             "jsonrpc": "2.0",
@@ -46,6 +46,9 @@ class DeskpalClient:
         }
         self.proc.stdin.write(json.dumps(request) + "\n")
         self.proc.stdin.flush()
+        return self.request_id
+
+    def read_response(self):
         line = self.proc.stdout.readline()
         if not line.startswith("{"):
             return_code = self.proc.poll()
@@ -55,6 +58,10 @@ class DeskpalClient:
                 f"returncode={return_code}; stderr={stderr!r}"
             )
         return json.loads(line)
+
+    def call(self, method, params):
+        self.send_request(method, params)
+        return self.read_response()
 
     def notify(self, method, params=None):
         request = {

@@ -22,6 +22,7 @@ from deskpal_client import (
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "test", "fixtures", "accessibility_app.py")
+EVENT_PROBE = os.path.join(os.path.dirname(DESKPAL), "accessibility-event-probe")
 TITLE = "Deskpal Accessibility Fixture"
 DEEP_TITLE = "Deskpal Accessibility Deep Fixture"
 BOUNDARY_TITLE = "Deskpal Accessibility Boundary Fixture"
@@ -98,6 +99,35 @@ def find_nodes(tree):
 
 def accessibility_payload(result):
     return json.loads(text(result))
+
+
+def start_event_probe(env, process_id, bus_name, window_path,
+                      application, window, timeout_ms, window_id,
+                      cancel_after_ms=None):
+    command = [
+        EVENT_PROBE, str(process_id), bus_name, window_path,
+        application, window, str(timeout_ms), window_id
+    ]
+    if cancel_after_ms is not None:
+        command.append(str(cancel_after_ms))
+    process = subprocess.Popen(
+        command,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    ready = process.stdout.readline().strip()
+    assert ready == "READY", (ready, process.stderr.read())
+    return process
+
+
+def finish_event_probe(process, expected_returncode=0):
+    stdout, stderr = process.communicate(timeout=3)
+    assert process.returncode == expected_returncode, (
+        process.returncode, stdout, stderr
+    )
+    return json.loads(stdout.strip())
 
 
 def run_rich_suite(env):
@@ -396,6 +426,267 @@ def run_rich_suite(env):
         )
         focused_with_text = accessibility_payload(focused_with_text)
         assert focused_with_text["element"]["text"] == "", focused_with_text
+
+        # Prove temporary listener registration, GLib dispatch, exact-window
+        # filtering, bounded accounting, cancellation, and deregistration before
+        # a public semantic-change wait tool depends on this lifecycle.
+        semantic_window = tree["applications"][0]["windows"][0]
+        window_root = semantic_window["nodes"][0]
+        assert window_root["path"] == [], window_root
+        window_locator = window_root["locator"]
+        assert window_locator["processId"] == fixture.pid, window_locator
+        event_probe = start_event_probe(
+            env,
+            fixture.pid,
+            window_locator["busName"],
+            window_locator["objectPath"],
+            tree["applications"][0]["name"],
+            TITLE,
+            1000,
+            fixture_window_id,
+        )
+        checkbox_bounds = checkbox_node["bounds"]
+        subprocess.run(
+            [
+                "xdotool", "mousemove", "--sync",
+                str(checkbox_bounds["x"] + checkbox_bounds["width"] // 2),
+                str(checkbox_bounds["y"] + checkbox_bounds["height"] // 2),
+                "click", "1",
+            ],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        event_result = finish_event_probe(event_probe)
+        assert event_result["registered"] is True, event_result
+        assert event_result["deregistered"] is True, event_result
+        assert event_result["waitCount"] >= 1, event_result
+        assert event_result["relevantEventCount"] >= 1, event_result
+        assert event_result["eventCount"] >= event_result["relevantEventCount"]
+        assert event_result["droppedEventCount"] == 0, event_result
+        assert event_result["overflow"] is False, event_result
+        assert event_result["timedOut"] is False, event_result
+        assert event_result["cancelled"] is False, event_result
+        assert event_result["revisionChanged"] is True, event_result
+        assert event_result["identityCaptured"] is True, event_result
+        assert event_result["diffChanged"] is True, event_result
+        assert event_result["diffComparable"] is True, event_result
+
+        # A mismatched window identity in the same process must observe these
+        # callbacks only as irrelevant while the click restores checkbox state
+        # and entry focus.
+        filter_probe = start_event_probe(
+            env,
+            fixture.pid,
+            window_locator["busName"],
+            window_locator["objectPath"] + "/not-the-captured-window",
+            tree["applications"][0]["name"],
+            TITLE,
+            250,
+            fixture_window_id,
+        )
+        subprocess.run(
+            [
+                "xdotool", "click", "1", "mousemove", "--sync",
+                str(entry["bounds"]["x"] + entry["bounds"]["width"] // 2),
+                str(entry["bounds"]["y"] + entry["bounds"]["height"] // 2),
+                "click", "1",
+            ],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        filter_result = finish_event_probe(filter_probe)
+        assert filter_result["registered"] is True, filter_result
+        assert filter_result["deregistered"] is True, filter_result
+        assert filter_result["waitCount"] == 1, filter_result
+        assert filter_result["timedOut"] is True, filter_result
+        assert filter_result["relevantEventCount"] == 0, filter_result
+        assert filter_result["irrelevantEventCount"] >= 1, filter_result
+        assert filter_result["identityCaptured"] is False, filter_result
+
+        cancel_probe = start_event_probe(
+            env,
+            0xFFFFFFFF,
+            window_locator["busName"],
+            window_locator["objectPath"],
+            tree["applications"][0]["name"],
+            TITLE,
+            1000,
+            fixture_window_id,
+            50,
+        )
+        cancel_result = finish_event_probe(cancel_probe)
+        assert cancel_result["registered"] is True, cancel_result
+        assert cancel_result["deregistered"] is True, cancel_result
+        assert cancel_result["waitCount"] == 1, cancel_result
+        assert cancel_result["cancelled"] is True, cancel_result
+        assert cancel_result["timedOut"] is False, cancel_result
+        assert cancel_result["relevantEventCount"] == 0, cancel_result
+        assert cancel_result["revisionChanged"] is False, cancel_result
+
+        forced_probe = start_event_probe(
+            env,
+            fixture.pid,
+            window_locator["busName"],
+            window_locator["objectPath"],
+            tree["applications"][0]["name"],
+            TITLE,
+            3000,
+            fixture_window_id,
+        )
+        forced_probe.terminate()
+        forced_probe.wait(timeout=2)
+        assert forced_probe.returncode < 0, forced_probe.returncode
+        forced_probe.stdout.close()
+        forced_probe.stderr.close()
+
+        replacement_probe = start_event_probe(
+            env,
+            fixture.pid,
+            window_locator["busName"],
+            window_locator["objectPath"],
+            tree["applications"][0]["name"],
+            TITLE,
+            1000,
+            fixture_window_id,
+        )
+        subprocess.run(
+            [
+                "xdotool", "windowsize", fixture_window_id,
+                str(target_geometry["width"] + 10),
+                str(target_geometry["height"] + 10),
+            ],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        replacement_result = finish_event_probe(replacement_probe, 4)
+        assert replacement_result["registered"] is True, replacement_result
+        assert replacement_result["deregistered"] is True, replacement_result
+        assert replacement_result["targetInvalid"] is True, replacement_result
+        assert replacement_result["revisionChanged"] is False, replacement_result
+        subprocess.run(
+            [
+                "xdotool", "windowsize", fixture_window_id,
+                str(target_geometry["width"]), str(target_geometry["height"]),
+            ],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.1)
+
+        def delayed_checkbox_click():
+            time.sleep(0.5)
+            subprocess.run(
+                [
+                    "xdotool", "mousemove", "--sync",
+                    str(checkbox_bounds["x"] + checkbox_bounds["width"] // 2),
+                    str(checkbox_bounds["y"] + checkbox_bounds["height"] // 2),
+                    "click", "1",
+                ],
+                env=env,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+        click_worker = threading.Thread(target=delayed_checkbox_click)
+        click_worker.start()
+        public_wait_id = client.send_request(
+            "tools/call",
+            {
+                "name": "wait_for_semantic_change",
+                "arguments": {
+                    "captureId": app_state["captureId"],
+                    "timeoutMs": 3000,
+                },
+            },
+        )
+        public_wait_response = client.read_response()
+        click_worker.join(timeout=2)
+        assert not click_worker.is_alive()
+        assert public_wait_response["id"] == public_wait_id, public_wait_response
+        public_wait = public_wait_response["result"]
+        assert public_wait.get("isError") is not True, public_wait
+        public_change = public_wait["semanticChange"]
+        assert public_change["status"] == "changed", public_change
+        assert public_change["untrustedContent"] is True, public_change
+        assert "application-controlled" in public_change["contentWarning"]
+        assert public_change["changed"] is True, public_change
+        assert public_change["semanticDiff"]["comparable"] is True, public_change
+        assert public_change["semanticDiff"]["changed"] is True, public_change
+        assert public_change["events"]["registered"] is True, public_change
+        assert public_change["events"]["deregistered"] is True, public_change
+        assert public_change["inputDelivered"] is False, public_change
+
+        cancelled_wait_id = client.send_request(
+            "tools/call",
+            {
+                "name": "wait_for_semantic_change",
+                "arguments": {
+                    "captureId": app_state["captureId"],
+                    "timeoutMs": 3000,
+                },
+            },
+        )
+        client.notify(
+            "notifications/cancelled",
+            {"requestId": cancelled_wait_id, "reason": "deterministic test"},
+        )
+        cancelled_wait_response = client.read_response()
+        assert cancelled_wait_response["id"] == cancelled_wait_id
+        cancelled_wait = cancelled_wait_response["result"]
+        assert cancelled_wait.get("isError") is True, cancelled_wait
+        cancelled_change = cancelled_wait["semanticChange"]
+        assert cancelled_change["status"] == "cancelled", cancelled_change
+        assert cancelled_change["events"]["registered"] is True, cancelled_change
+        assert cancelled_change["events"]["deregistered"] is True, cancelled_change
+
+        disconnect_wait_client = DeskpalClient(
+            env, args=["--no-uinput"], name="e2e-semantic-wait-disconnect"
+        )
+        disconnect_base = disconnect_wait_client.tool(
+            "get_app_state", {"windowName": TITLE}
+        )["appState"]
+        disconnect_wait_id = disconnect_wait_client.send_request(
+            "tools/call",
+            {
+                "name": "wait_for_semantic_change",
+                "arguments": {
+                    "captureId": disconnect_base["captureId"],
+                    "timeoutMs": 3000,
+                },
+            },
+        )
+        disconnect_wait_client.proc.stdin.close()
+        disconnect_wait_response = disconnect_wait_client.read_response()
+        assert disconnect_wait_response["id"] == disconnect_wait_id
+        disconnect_change = disconnect_wait_response["result"]["semanticChange"]
+        assert disconnect_change["status"] == "cancelled", disconnect_change
+        assert disconnect_change["events"]["deregistered"] is True
+        disconnect_wait_client.proc.wait(timeout=2)
+        assert disconnect_wait_client.proc.returncode == 0
+        disconnect_wait_client.proc.stderr.read()
+
+        # Restore checkbox state and entry focus after public wait coverage.
+        subprocess.run(
+            [
+                "xdotool", "click", "1", "mousemove", "--sync",
+                str(entry["bounds"]["x"] + entry["bounds"]["width"] // 2),
+                str(entry["bounds"]["y"] + entry["bounds"]["height"] // 2),
+                "click", "1",
+            ],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
         def visible_text(name):
             snapshot = accessibility_payload(
@@ -1800,6 +2091,7 @@ def main():
                     "get_accessibility_tree",
                     "get_focused_element",
                     "accessibility_action",
+                    "wait_for_semantic_change",
                     "agent_semantic_press",
                     "agent_semantic_set_text",
                     "agent_semantic_set_value",
@@ -1839,6 +2131,12 @@ def main():
                 assert {
                     "busName", "objectPath", "processId"
                 }.issubset(target_conditions[0]["then"]["required"])
+                wait_schema = tool_by_name(
+                    tools, "wait_for_semantic_change"
+                )["inputSchema"]
+                assert wait_schema["required"] == ["captureId"]
+                assert wait_schema["properties"]["timeoutMs"]["default"] == 5000
+                assert "sessionId" not in wait_schema["properties"]
                 press_schema = tool_by_name(
                     tools, "agent_semantic_press"
                 )["inputSchema"]

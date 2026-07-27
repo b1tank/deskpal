@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "mcp.h"
+#include "mcp_transport.h"
 #include "sessions.h"
 #include "control.h"
 #include "tools.h"
@@ -17,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* ── Tool registry ────────────────────────────────────────────────────────── */
 
@@ -24,6 +26,11 @@
 static McpTool  g_tools[MAX_TOOLS];
 static int      g_tool_count = 0;
 static cJSON   *g_schemas[MAX_TOOLS]; /* owned schema objects */
+static McpInputTransport *g_input_transport;
+static const cJSON *g_active_request_id;
+static int g_active_request_cancelled;
+static int g_active_request_disconnected;
+static int g_input_transport_failed;
 
 void mcp_register_tool(const char *name, const char *description,
                        const char *schema_json, mcp_tool_handler_t handler)
@@ -48,6 +55,7 @@ void mcp_register_tool(const char *name, const char *description,
 	    strcmp(name, "get_accessibility_tree") != 0 &&
 	    strcmp(name, "get_focused_element") != 0 &&
 	    strcmp(name, "accessibility_action") != 0 &&
+	    strcmp(name, "wait_for_semantic_change") != 0 &&
 	    strcmp(name, "agent_semantic_press") != 0 &&
 	    strcmp(name, "agent_semantic_set_text") != 0 &&
 	    strcmp(name, "agent_semantic_set_value") != 0 &&
@@ -164,6 +172,20 @@ static int send_response(const cJSON *id, cJSON *result, cJSON *error)
 	}
 	cJSON_Delete(resp);
 	return failed ? -1 : 0;
+}
+
+int mcp_request_cancelled(void)
+{
+	if (!g_input_transport)
+		return g_active_request_cancelled || g_active_request_disconnected;
+	if (mcp_input_transport_poll_cancel(
+	    g_input_transport, g_active_request_id,
+	    &g_active_request_cancelled,
+	    &g_active_request_disconnected) != 0) {
+		g_input_transport_failed = 1;
+		g_active_request_disconnected = 1;
+	}
+	return g_active_request_cancelled || g_active_request_disconnected;
 }
 
 /* ── Request handlers ─────────────────────────────────────────────────────── */
@@ -348,6 +370,13 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 	    (!integer_in_range(arguments, "maxWidth", 0, 8192) ||
 	     !integer_in_range(arguments, "maxHeight", 0, 8192)))
 		return mcp_tool_error_result("maxWidth/maxHeight must be integers between 0 and 8192");
+	if (strcmp(tool_name, "wait_for_semantic_change") == 0) {
+		if (!bounded_string_if_present(arguments, "captureId", 63) ||
+		    !cJSON_GetObjectItem(arguments, "captureId") ||
+		    !integer_in_range(arguments, "timeoutMs", 1, 5000))
+			return mcp_tool_error_result(
+				"wait_for_semantic_change requires a captureId and a 1-5000 ms timeout");
+	}
 	if (strcmp(tool_name, "get_app_state") == 0) {
 		if (!integer_in_range(arguments, "semanticMaxDepth", 1, 8) ||
 		    !integer_in_range(arguments, "semanticMaxNodes", 1, 300))
@@ -691,6 +720,7 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "get_accessibility_tree") != 0 &&
 		strcmp(tool_name, "get_focused_element") != 0 &&
 		strcmp(tool_name, "accessibility_action") != 0 &&
+		strcmp(tool_name, "wait_for_semantic_change") != 0 &&
 		strcmp(tool_name, "agent_semantic_press") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_text") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_value") != 0 &&
@@ -704,6 +734,7 @@ static cJSON *handle_tools_call(const cJSON *params)
 	     strcmp(tool_name, "get_accessibility_tree") == 0 ||
 	     strcmp(tool_name, "get_focused_element") == 0 ||
 	     strcmp(tool_name, "accessibility_action") == 0 ||
+	     strcmp(tool_name, "wait_for_semantic_change") == 0 ||
 	     strcmp(tool_name, "agent_semantic_press") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_text") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_value") == 0 ||
@@ -738,20 +769,24 @@ static cJSON *handle_tools_call(const cJSON *params)
 
 int mcp_run(void)
 {
+	g_input_transport = mcp_input_transport_new(STDIN_FILENO);
+	if (!g_input_transport) return -1;
 	char *line = NULL;
-	size_t line_cap = 0;
-	ssize_t line_len;
 	int transport_failed = 0;
+	int next_result;
 
-	while ((line_len = getline(&line, &line_cap, stdin)) > 0) {
-		/* Strip trailing newline */
-		if (line_len > 0 && line[line_len - 1] == '\n')
-			line[line_len - 1] = '\0';
-
+	while ((next_result = mcp_input_transport_next(
+	        g_input_transport, &line)) == 1) {
 		/* Skip empty lines */
-		if (line[0] == '\0') continue;
+		if (line[0] == '\0') {
+			free(line);
+			line = NULL;
+			continue;
+		}
 
 		cJSON *req = cJSON_Parse(line);
+		free(line);
+		line = NULL;
 		if (!req) {
 			cJSON *err = mcp_error(-32700, "Parse error");
 			if (send_response(NULL, NULL, err) != 0) {
@@ -791,7 +826,11 @@ int mcp_run(void)
 			send_failed = send_response(id, result, NULL) != 0;
 		}
 		else if (strcmp(m, "tools/call") == 0) {
+			g_active_request_id = id;
+			g_active_request_cancelled = 0;
+			g_active_request_disconnected = 0;
 			cJSON *result = handle_tools_call(params);
+			g_active_request_id = NULL;
 			if (result) {
 				send_failed = send_response(id, result, NULL) != 0;
 			} else {
@@ -821,6 +860,11 @@ int mcp_run(void)
 	}
 
 	free(line);
+	if (next_result < 0 || g_input_transport_failed)
+		transport_failed = 1;
+	mcp_input_transport_free(g_input_transport);
+	g_input_transport = NULL;
+	g_active_request_id = NULL;
 	return transport_failed ? -1 : 0;
 }
 

@@ -30,17 +30,16 @@ vendor_src = files('vendor/cjson/cJSON.c')
 core_src = files(
   'csrc/main.c',
   'csrc/mcp.c',
+  'csrc/mcp_transport.c',
   'csrc/x11.c',
   'csrc/uinput.c',
   'csrc/screenshot.c',
   'csrc/captures.c',
-  'csrc/semantic_state.c',
   'csrc/indicator.c',
   'csrc/ocr.c',
   'csrc/tools.c',
   'csrc/sessions.c',
   'csrc/control.c',
-  'csrc/accessibility.c',
 )
 
 c_args = ['-D_GNU_SOURCE']
@@ -59,10 +58,28 @@ if atspi_dep.found()
   core_deps += [atspi_dep, gobject_dep]
 endif
 
+semantic_observation = static_library('semantic-observation',
+  files('csrc/accessibility.c', 'csrc/semantic_state.c',
+        'csrc/semantic_events.c', 'csrc/semantic_change.c'), vendor_src,
+  include_directories : [vendor_inc, include_directories('csrc')],
+  dependencies : core_deps,
+  c_args : c_args)
+
 executable('deskpal',
-  core_src, vendor_src,
+  core_src,
+  link_with : semantic_observation,
   include_directories : [vendor_inc, include_directories('csrc')],
   dependencies : core_deps,
   c_args : c_args,
   link_args : link_args + ['-ldl'],  # for dlopen
   install : true)
+
+# Safe integration helper for the temporary AT-SPI listener lifecycle proof.
+executable('accessibility-event-probe',
+  files('test/accessibility_event_probe.c', 'csrc/x11.c', 'csrc/uinput.c'),
+  link_with : semantic_observation,
+  include_directories : [vendor_inc, include_directories('csrc')],
+  dependencies : core_deps,
+  c_args : c_args,
+  link_args : link_args,
+  install : false)

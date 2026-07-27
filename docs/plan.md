@@ -148,6 +148,23 @@ broker actions will drive.
         cancellation, exact-target filtering, and cleanup before exposing a
         semantic-change wait tool; use revision polling only if the listener
         lifecycle cannot be made reliable, and report that fallback truthfully.
+    - [x] Extract an opaque begin/wait/end listener lifecycle with one shared
+          semantic-window identity and registration across repeated wakeups.
+          Prove bounded GLib dispatch, exact-window filtering, callback
+          cancellation, timeout, accounting, deregistration, and canonical
+          revision verification in private Xvfb; retain identity in stable
+          captures. See [`semantic-events.md`](semantic-events.md).
+    - [x] Compose an internal capture-bound loop that revalidates exact X11
+          identity and geometry, re-observes after wakeups, continues past
+          unchanged revisions under one registration, rejects accessible-window
+          replacement, and returns the existing bounded diff or incomplete-
+          projection result.
+    - [x] Add bounded transport-safe MCP cancellation with queued-request
+          preservation, disconnect cancellation, Pi graceful-cancel fallback,
+          and listener disconnect/process-termination cleanup coverage.
+    - [x] Expose `wait_for_semantic_change` with retained capture validation,
+          bounded event accounting, canonical diffs, truthful timeout and
+          cancellation outcomes, and no input or desktop-state mutation.
 - [ ] Add `backgroundOnly` and `foregroundAllowed` delivery policy plus
       structured `backgroundUnavailable` errors.
 - [ ] Add per-app capability policy, untrusted-content marking, high-impact

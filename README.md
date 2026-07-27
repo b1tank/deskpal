@@ -14,6 +14,8 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 | `list_windows` | List top-level app windows with IDs, titles, `WM_CLASS`, geometry, PID; optionally include recursive helpers/dialogs |
 | `accessibility_status` | Cheaply report whether the optional AT-SPI backend is compiled and connected |
 | `get_accessibility_tree` | Return a scoped, bounded semantic tree with roles, names, states, logical bounds, actions, optional attributes/text, and short-lived locators |
+| `get_app_state` | Capture one exact X11/Xwayland window with stable identity, image transform, bounded semantics, revision, and optional diff |
+| `wait_for_semantic_change` | Wait cancellably from a stable app-state capture for a canonical semantic revision change and bounded diff without delivering input |
 | `get_focused_element` | Return the true focused AT-SPI child within a required application/window scope; ambiguous results fail closed |
 | `accessibility_action` | Perform verified semantic `setText`, `focus`, or named `invoke` on one uniquely resolved accessible element |
 | `find_window` | Find a window by title substring |

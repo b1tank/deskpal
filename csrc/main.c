@@ -15,6 +15,7 @@
 #include "accessibility.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -176,6 +177,9 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
+	/* A disconnected MCP client must unwind tool and session cleanup instead of
+	 * terminating at the first response write. */
+	signal(SIGPIPE, SIG_IGN);
 	/* Disable stdout buffering for MCP stdio transport */
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
