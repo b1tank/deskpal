@@ -21,7 +21,8 @@ The suites are:
 - `test:extension`: Node syntax-check of the Pi bridge, including graceful MCP
   cancellation and its bounded process-termination fallback.
 - `frame_state.py`: build-matched deterministic coverage for normalized visual
-  revisions, tolerance, changed bounds/counts, and non-comparable dimensions.
+  revisions, tolerance, changed bounds/counts, non-comparable dimensions, anchor-
+  based settling, timeout, and cancellation.
 - `indicator_contract.py`: static GNOME extension syntax, narrow D-Bus surface,
   caller ownership hooks, click-through behavior, and absence of input APIs.
 - `e2e_isolation.py`: parent/child routing, Xvfb lifecycle, cleanup, malformed
@@ -29,7 +30,8 @@ The suites are:
 - `e2e_computer_use.py`: deterministic Tk workflow for app identity, environment
   capability/blocker reporting, transport cancellation with queued-request
   preservation and disconnect exit, exact capture-bound app-state observations,
-  privacy-safe semantic and visual revisions/diffs, screenshot scaling metadata,
+  privacy-safe semantic and visual revisions/diffs, cancellable frame settling,
+  stale-geometry refusal, screenshot scaling metadata,
   screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
   controller lock contention, held-input/session release guards, persistent
   successor acquisition, and isolated-operation independence.

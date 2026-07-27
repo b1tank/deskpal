@@ -58,7 +58,8 @@ if atspi_dep.found()
 endif
 
 frame_observation = static_library('frame-observation',
-  files('csrc/screenshot.c', 'csrc/frame_state.c'),
+  files('csrc/frame_buffer.c', 'csrc/screenshot.c', 'csrc/frame_state.c',
+        'csrc/frame_settle.c'),
   include_directories : [vendor_inc, include_directories('csrc')],
   dependencies : core_deps,
   c_args : c_args)

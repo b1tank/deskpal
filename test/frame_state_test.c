@@ -1,8 +1,56 @@
 /* Deterministic unit coverage for visual frame signatures and diffs. */
+#include "frame_settle.h"
 #include "frame_state.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+typedef struct {
+	const uint8_t *template_pixels;
+	const int *values;
+	int value_count;
+	int index;
+	int valid;
+	int cancel;
+} SettleFixture;
+
+static int validate_fixture(const DeskpalCapture *base, void *data,
+                            char *error, size_t error_len)
+{
+	(void)base;
+	SettleFixture *fixture = data;
+	if (fixture->valid) return 0;
+	snprintf(error, error_len, "fixture target changed");
+	return -1;
+}
+
+static int capture_fixture(const DeskpalCapture *base, void *data,
+                           ScreenshotFrame *frame,
+                           char *error, size_t error_len)
+{
+	(void)error;
+	(void)error_len;
+	SettleFixture *fixture = data;
+	frame->length = (size_t)base->source_width *
+	                (size_t)base->source_height * 4;
+	frame->pixels = malloc(frame->length);
+	if (!frame->pixels) return -1;
+	memcpy(frame->pixels, fixture->template_pixels, frame->length);
+	int position = fixture->index < fixture->value_count
+		? fixture->index : fixture->value_count - 1;
+	frame->pixels[0] = (uint8_t)(frame->pixels[0] + fixture->values[position]);
+	fixture->index++;
+	frame->width = base->source_width;
+	frame->height = base->source_height;
+	frame->depth = 24;
+	return 0;
+}
+
+static int cancel_fixture(void *data)
+{
+	return ((SettleFixture *)data)->cancel;
+}
 
 #define CHECK(condition) do { \
 	if (!(condition)) { \
@@ -63,6 +111,48 @@ int main(void)
 	CHECK(frame_state_compare(&first, &same, -1, &diff) == -1);
 	CHECK(frame_state_signature(NULL, &first_signature) == -1);
 
-	puts("PASS: visual frame signatures and bounded pixel diffs");
+	DeskpalCapture base = {
+		.target = DESKPAL_CAPTURE_WINDOW,
+		.source_width = 2,
+		.source_height = 2,
+	};
+	snprintf(base.frame_revision, sizeof(base.frame_revision), "%s",
+	         first_signature.revision);
+	const int changing_values[] = {0, 0, 10, 10, 10, 10, 10};
+	SettleFixture fixture = {
+		.template_pixels = first_pixels,
+		.values = changing_values,
+		.value_count = (int)(sizeof(changing_values) /
+		                    sizeof(changing_values[0])),
+		.valid = 1,
+	};
+	FrameSettleResult settled;
+	CHECK(frame_settle_wait(
+		&base, frame_settle_monotonic_ms() + 500,
+		30, 10, 0, validate_fixture, capture_fixture, &fixture,
+		cancel_fixture, &fixture, &settled) == 1);
+	CHECK(settled.status == FRAME_SETTLE_SETTLED);
+	CHECK(settled.change_count == 1 && settled.changed_from_capture);
+	CHECK(settled.stable_for_ms >= 30 && settled.sample_count >= 5);
+
+	const int static_values[] = {0};
+	fixture.values = static_values;
+	fixture.value_count = 1;
+	fixture.index = 0;
+	CHECK(frame_settle_wait(
+		&base, frame_settle_monotonic_ms() + 50,
+		100, 20, 0, validate_fixture, capture_fixture, &fixture,
+		cancel_fixture, &fixture, &settled) == 0);
+	CHECK(settled.status == FRAME_SETTLE_TIMEOUT);
+
+	fixture.index = 0;
+	fixture.cancel = 1;
+	CHECK(frame_settle_wait(
+		&base, frame_settle_monotonic_ms() + 100,
+		30, 10, 0, validate_fixture, capture_fixture, &fixture,
+		cancel_fixture, &fixture, &settled) == 0);
+	CHECK(settled.status == FRAME_SETTLE_CANCELLED);
+
+	puts("PASS: visual frame signatures, diffs, and settling");
 	return 0;
 }

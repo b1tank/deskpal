@@ -92,6 +92,9 @@ def run_suite():
             cursor_move_schema = tool_by_name(tools, "agent_cursor_move")["inputSchema"]
             environment_schema = tool_by_name(tools, "get_environment_status")["inputSchema"]
             app_state_schema = tool_by_name(tools, "get_app_state")["inputSchema"]
+            frame_settle_schema = tool_by_name(
+                tools, "wait_for_frame_stable"
+            )["inputSchema"]
             tool_by_name(tools, "agent_cursor_status")
             tool_by_name(tools, "agent_cursor_hide")
             release_schema = tool_by_name(tools, "release_control")["inputSchema"]
@@ -106,6 +109,9 @@ def run_suite():
             assert app_state_schema["properties"]["maxWidth"]["default"] == 1920
             assert app_state_schema["properties"]["includeOffscreen"]["default"] is False
             assert app_state_schema["properties"]["includeText"]["default"] is False
+            assert frame_settle_schema["required"] == ["captureId"]
+            assert frame_settle_schema["properties"]["stableMs"]["default"] == 200
+            assert "sessionId" not in frame_settle_schema["properties"]
 
             cancel_started = time.monotonic()
             cancelled_id = client.send_request(
@@ -166,6 +172,7 @@ def run_suite():
                 "sharedSeat": True,
                 "nonInterfering": False,
             }, environment
+            assert environment["capabilities"]["frameSettling"]["available"] is True
             assert environment["capabilities"]["semanticChangeWait"]["available"] is False
             assert environment["capabilities"]["semanticPress"]["available"] is False
             assert environment["capabilities"]["semanticSetText"]["available"] is False
@@ -307,6 +314,48 @@ def run_suite():
             assert app_state["semantic"]["includeText"] is False, app_state
             assert app_state["semantic"]["includeAttributes"] is False, app_state
             assert app_state["inputDelivered"] is False, app_state
+
+            settled_result = client.tool(
+                "wait_for_frame_stable",
+                {
+                    "captureId": app_state["captureId"],
+                    "timeoutMs": 1000,
+                    "stableMs": 100,
+                    "intervalMs": 20,
+                },
+            )
+            settled = settled_result["frameSettle"]
+            assert settled["status"] == "settled", settled
+            assert settled["settled"] is True, settled
+            assert isinstance(settled["changedFromCapture"], bool), settled
+            assert settled["sampleCount"] >= 2, settled
+            assert settled["stableForMs"] >= 100, settled
+            assert settled["baseRevision"].startswith("fnv1a64-"), settled
+            assert settled["finalRevision"].startswith("fnv1a64-"), settled
+            assert settled["inputDelivered"] is False, settled
+
+            cancelled_frame_id = client.send_request(
+                "tools/call",
+                {
+                    "name": "wait_for_frame_stable",
+                    "arguments": {
+                        "captureId": app_state["captureId"],
+                        "timeoutMs": 1000,
+                        "stableMs": 500,
+                        "intervalMs": 20,
+                    },
+                },
+            )
+            client.notify(
+                "notifications/cancelled",
+                {"requestId": cancelled_frame_id, "reason": "deterministic test"},
+            )
+            cancelled_frame_response = client.read_response()
+            assert cancelled_frame_response["id"] == cancelled_frame_id
+            cancelled_frame = cancelled_frame_response["result"]
+            assert cancelled_frame.get("isError") is True, cancelled_frame
+            assert cancelled_frame["frameSettle"]["status"] == "cancelled"
+
             by_id = client.tool(
                 "get_app_state",
                 {"windowId": app_state["target"]["windowId"], "maxWidth": 360},
@@ -345,6 +394,12 @@ def run_suite():
             )
             assert stale_app_capture.get("isError") is True, stale_app_capture
             assert "geometry changed" in text(stale_app_capture), stale_app_capture
+            stale_frame_wait = client.tool(
+                "wait_for_frame_stable",
+                {"captureId": app_state["captureId"], "timeoutMs": 200},
+            )
+            assert stale_frame_wait.get("isError") is True, stale_frame_wait
+            assert stale_frame_wait["frameSettle"]["status"] == "error"
             client.tool(
                 "resize_window",
                 {"windowId": app_state["target"]["windowId"], "width": 720, "height": 520},

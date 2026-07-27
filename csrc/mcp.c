@@ -56,6 +56,7 @@ void mcp_register_tool(const char *name, const char *description,
 	    strcmp(name, "get_focused_element") != 0 &&
 	    strcmp(name, "accessibility_action") != 0 &&
 	    strcmp(name, "wait_for_semantic_change") != 0 &&
+	    strcmp(name, "wait_for_frame_stable") != 0 &&
 	    strcmp(name, "agent_semantic_press") != 0 &&
 	    strcmp(name, "agent_semantic_set_text") != 0 &&
 	    strcmp(name, "agent_semantic_set_value") != 0 &&
@@ -370,6 +371,25 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 	    (!integer_in_range(arguments, "maxWidth", 0, 8192) ||
 	     !integer_in_range(arguments, "maxHeight", 0, 8192)))
 		return mcp_tool_error_result("maxWidth/maxHeight must be integers between 0 and 8192");
+	if (strcmp(tool_name, "wait_for_frame_stable") == 0) {
+		if (!bounded_string_if_present(arguments, "captureId", 63) ||
+		    !cJSON_GetObjectItem(arguments, "captureId") ||
+		    !integer_in_range(arguments, "timeoutMs", 1, 5000) ||
+		    !integer_in_range(arguments, "stableMs", 20, 2000) ||
+		    !integer_in_range(arguments, "intervalMs", 10, 500) ||
+		    !integer_in_range(arguments, "tolerance", 0, 255))
+			return mcp_tool_error_result(
+				"wait_for_frame_stable has invalid capture, timeout, stability, interval, or tolerance fields");
+		const cJSON *timeout = arguments
+			? cJSON_GetObjectItem(arguments, "timeoutMs") : NULL;
+		const cJSON *stable = arguments
+			? cJSON_GetObjectItem(arguments, "stableMs") : NULL;
+		int timeout_ms = timeout ? timeout->valueint : 3000;
+		int stable_ms = stable ? stable->valueint : 200;
+		if (stable_ms > timeout_ms)
+			return mcp_tool_error_result(
+				"stableMs cannot exceed timeoutMs");
+	}
 	if (strcmp(tool_name, "wait_for_semantic_change") == 0) {
 		if (!bounded_string_if_present(arguments, "captureId", 63) ||
 		    !cJSON_GetObjectItem(arguments, "captureId") ||
@@ -721,6 +741,7 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "get_focused_element") != 0 &&
 		strcmp(tool_name, "accessibility_action") != 0 &&
 		strcmp(tool_name, "wait_for_semantic_change") != 0 &&
+		strcmp(tool_name, "wait_for_frame_stable") != 0 &&
 		strcmp(tool_name, "agent_semantic_press") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_text") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_value") != 0 &&
@@ -735,6 +756,7 @@ static cJSON *handle_tools_call(const cJSON *params)
 	     strcmp(tool_name, "get_focused_element") == 0 ||
 	     strcmp(tool_name, "accessibility_action") == 0 ||
 	     strcmp(tool_name, "wait_for_semantic_change") == 0 ||
+	     strcmp(tool_name, "wait_for_frame_stable") == 0 ||
 	     strcmp(tool_name, "agent_semantic_press") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_text") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_value") == 0 ||

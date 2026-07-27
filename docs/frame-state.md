@@ -26,7 +26,27 @@ source frame was available. Fallback captures that only produce a PNG report
 `frameRevisionAvailable: false`. Stable app-state captures retain the source
 frame revision for later capture-bound frame settling and visual verification.
 
-This milestone does not yet claim that a frame is settled, wait on frames, or
-verify a pixel action. The next slice must define a bounded sampling lifecycle,
-exact-window revalidation, stability duration, cancellation, tolerance policy,
-and truthful timeout/non-comparable results before exposing such a claim.
+`wait_for_frame_stable` accepts a retained stable `get_app_state` capture and
+samples its normalized source pixels under one absolute deadline. It validates
+exact X11 identity and geometry before capture, around every sample, and before
+success or timeout. Stability is measured against the anchor frame at the start
+of the current stable period—not merely against the previous sample—so slow
+per-sample drift cannot be misclassified as settled. Stability means unchanged
+for the requested observation window; an animation whose quiet period is longer
+than `stableMs` can still settle between transitions, so callers must choose a
+duration appropriate to the application.
+
+Callers choose a required stable duration, sample interval, and channel
+tolerance within bounded schema limits. Results report samples, transitions
+detected after waiting began, stable duration, exact base/final revisions,
+changed-from-capture state, and bounded summaries of the last and largest
+transitions. A difference already present in the first sample sets
+`changedFromCapture` without inventing an observed transition. Timeout is a truthful
+unsettled result; cancellation is interrupted; changed geometry, unsupported
+pixels, capture failure, and non-comparable frames fail closed. The tool never
+delivers input or changes focus, stacking, pointer, or clipboard state.
+
+This milestone does not yet use frame settling to claim that a pixel action
+succeeded. Pixel verification must additionally bind an action to before/after
+captures, define the expected changed region or visual postcondition, and report
+background-route side effects.

@@ -99,13 +99,6 @@ int screenshot_capture_frame(unsigned long wid, ScreenshotFrame *frame)
 	return 0;
 }
 
-void screenshot_frame_clear(ScreenshotFrame *frame)
-{
-	if (!frame) return;
-	free(frame->pixels);
-	memset(frame, 0, sizeof(*frame));
-}
-
 /* ── PNG encoding via libpng ──────────────────────────────────────────────── */
 
 struct png_mem_buf {

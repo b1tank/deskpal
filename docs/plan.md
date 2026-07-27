@@ -171,9 +171,11 @@ broker actions will drive.
   - [x] Add normalized source-frame revisions and a reusable bounded pixel-diff
         engine with explicit tolerance and non-comparable geometry results; see
         [`frame-state.md`](frame-state.md).
-  - [ ] Compose capture-bound frame settling with exact-window revalidation,
-        cancellation, stability duration, and truthful timeout results before
-        using frame differences to verify pixel actions.
+  - [x] Ship capture-bound `wait_for_frame_stable` with anchor-based stability,
+        exact-window revalidation, cancellation, bounded sampling/tolerance,
+        transition summaries, and truthful timeout/error results.
+  - [ ] Bind before/after stable frames to pixel actions and explicit visual
+        postconditions before claiming capture-bound pixel verification.
   - [ ] Prove bounded temporary AT-SPI listener registration, GLib dispatch,
         cancellation, exact-target filtering, and cleanup before exposing a
         semantic-change wait tool; use revision polling only if the listener

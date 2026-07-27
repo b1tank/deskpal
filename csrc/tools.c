@@ -12,6 +12,7 @@
 #include "x11.h"
 #include "screenshot.h"
 #include "frame_state.h"
+#include "frame_settle.h"
 #include "captures.h"
 #include "semantic_state.h"
 #include "semantic_change.h"
@@ -1182,7 +1183,7 @@ static int window_capture_still_valid(const DeskpalCapture *capture)
 	       current.height == capture->window_height;
 }
 
-static int validate_semantic_change_target(
+static int validate_captured_window(
 	const DeskpalCapture *base, void *data, char *error, size_t error_len)
 {
 	(void)data;
@@ -1263,7 +1264,7 @@ cJSON *tool_wait_for_semantic_change(const cJSON *params)
 	SemanticChangeResult change = {0};
 	int rc = semantic_change_wait(
 		&base, started_ms + timeout_ms,
-		validate_semantic_change_target, observe_semantic_change_target, NULL,
+		validate_captured_window, observe_semantic_change_target, NULL,
 		semantic_change_cancelled, NULL, &change);
 
 	cJSON *payload = cJSON_CreateObject();
@@ -1303,6 +1304,111 @@ cJSON *tool_wait_for_semantic_change(const cJSON *params)
 	if (rc < 0 || change.status == SEMANTIC_CHANGE_CANCELLED)
 		cJSON_AddBoolToObject(result, "isError", 1);
 	semantic_change_result_clear(&change);
+	return result;
+}
+
+static int capture_settle_frame(
+	const DeskpalCapture *base, void *data, ScreenshotFrame *frame,
+	char *error, size_t error_len)
+{
+	(void)data;
+	if (screenshot_capture_frame(base->window_id, frame) == 0) return 0;
+	snprintf(error, error_len, "Could not capture exact X11 window frame");
+	return -1;
+}
+
+static int frame_settle_cancelled(void *data)
+{
+	(void)data;
+	return mcp_request_cancelled();
+}
+
+static cJSON *frame_diff_json(const FrameStateDiff *diff)
+{
+	cJSON *json = cJSON_CreateObject();
+	cJSON_AddBoolToObject(json, "comparable", diff->comparable);
+	cJSON_AddBoolToObject(json, "changed", diff->changed);
+	cJSON_AddNumberToObject(json, "changedPixels",
+	                       (double)diff->changed_pixels);
+	cJSON_AddNumberToObject(json, "totalPixels", (double)diff->total_pixels);
+	cJSON_AddNumberToObject(json, "changedFraction", diff->changed_fraction);
+	cJSON_AddNumberToObject(json, "maxChannelDelta", diff->max_channel_delta);
+	if (diff->changed && diff->comparable) {
+		cJSON *bounds = cJSON_CreateObject();
+		cJSON_AddNumberToObject(bounds, "x", diff->x);
+		cJSON_AddNumberToObject(bounds, "y", diff->y);
+		cJSON_AddNumberToObject(bounds, "width", diff->width);
+		cJSON_AddNumberToObject(bounds, "height", diff->height);
+		cJSON_AddItemToObject(json, "changedBounds", bounds);
+	}
+	return json;
+}
+
+cJSON *tool_wait_for_frame_stable(const cJSON *params)
+{
+	const char *capture_id = json_str(params, "captureId", NULL);
+	int timeout_ms = json_int(params, "timeoutMs", 3000);
+	int stable_ms = json_int(params, "stableMs", 200);
+	int interval_ms = json_int(params, "intervalMs", 50);
+	int tolerance = json_int(params, "tolerance", 0);
+	DeskpalCapture base = {0};
+	int lookup = captures_lookup(capture_id, &base);
+	if (lookup == -2)
+		return mcp_tool_error_result(
+			"captureId is stale; take a fresh get_app_state observation");
+	if (lookup != 0 || base.target != DESKPAL_CAPTURE_WINDOW ||
+	    !base.frame_revision[0])
+		return mcp_tool_error_result(
+			"captureId must identify a stable get_app_state observation with source pixels");
+
+	long long started_ms = frame_settle_monotonic_ms();
+	FrameSettleResult settled = {0};
+	int rc = frame_settle_wait(
+		&base, started_ms + timeout_ms, stable_ms, interval_ms, tolerance,
+		validate_captured_window, capture_settle_frame, NULL,
+		frame_settle_cancelled, NULL, &settled);
+	cJSON *payload = cJSON_CreateObject();
+	cJSON_AddStringToObject(payload, "baseCaptureId", base.id);
+	const char *status = settled.status == FRAME_SETTLE_SETTLED ? "settled" :
+		settled.status == FRAME_SETTLE_TIMEOUT ? "timeout" :
+		settled.status == FRAME_SETTLE_CANCELLED ? "cancelled" : "error";
+	cJSON_AddStringToObject(payload, "status", status);
+	cJSON_AddBoolToObject(payload, "settled",
+	                     settled.status == FRAME_SETTLE_SETTLED);
+	cJSON_AddBoolToObject(payload, "timedOut",
+	                     settled.status == FRAME_SETTLE_TIMEOUT);
+	cJSON_AddBoolToObject(payload, "cancelled",
+	                     settled.status == FRAME_SETTLE_CANCELLED);
+	cJSON_AddNumberToObject(payload, "timeoutMs", timeout_ms);
+	cJSON_AddNumberToObject(payload, "stableMs", stable_ms);
+	cJSON_AddNumberToObject(payload, "intervalMs", interval_ms);
+	cJSON_AddNumberToObject(payload, "tolerance", tolerance);
+	cJSON_AddNumberToObject(payload, "elapsedMs",
+	                       frame_settle_monotonic_ms() - started_ms);
+	cJSON_AddNumberToObject(payload, "sampleCount", settled.sample_count);
+	cJSON_AddNumberToObject(payload, "changeCount", settled.change_count);
+	cJSON_AddNumberToObject(payload, "stableForMs", settled.stable_for_ms);
+	cJSON_AddBoolToObject(payload, "changedFromCapture",
+	                     settled.changed_from_capture);
+	cJSON_AddStringToObject(payload, "baseRevision", base.frame_revision);
+	if (settled.final_signature.revision[0])
+		cJSON_AddStringToObject(payload, "finalRevision",
+		                      settled.final_signature.revision);
+	if (settled.change_count > 0) {
+		cJSON_AddItemToObject(payload, "lastChange",
+		                     frame_diff_json(&settled.last_change));
+		cJSON_AddItemToObject(payload, "largestChange",
+		                     frame_diff_json(&settled.largest_change));
+	}
+	if (settled.error[0]) cJSON_AddStringToObject(payload, "error", settled.error);
+	cJSON_AddBoolToObject(payload, "inputDelivered", 0);
+	cJSON_AddBoolToObject(payload, "sharedPointerMoved", 0);
+	cJSON_AddBoolToObject(payload, "focusChanged", 0);
+	cJSON_AddBoolToObject(payload, "stackingChanged", 0);
+	cJSON_AddBoolToObject(payload, "clipboardChanged", 0);
+	cJSON *result = structured_text_result(payload, "frameSettle");
+	if (rc < 0 || settled.status == FRAME_SETTLE_CANCELLED)
+		cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
 
@@ -1944,6 +2050,7 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	int indicator_available = indicator_status != NULL;
 	int indicator_single_monitor = indicator_available &&
 		indicator_has_single_full_stage_monitor(indicator_status);
+	int frame_settle_available = !headless;
 	int semantic_wait_available = !headless && semantic_available;
 	int semantic_press_available = semantic_wait_available &&
 		indicator_single_monitor;
@@ -1973,6 +2080,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                      keyboard_uinput ? "uinput-and-xtest" : "xtest");
 	cJSON_AddStringToObject(backends, "indicator",
 	                      indicator_available ? "gnome-shell-dbus" : "unavailable");
+	cJSON_AddStringToObject(backends, "frameSettling",
+	                      frame_settle_available ? "x11-frame-sampling" : "unavailable");
 	cJSON_AddStringToObject(backends, "semanticChangeWait",
 	                      semantic_wait_available ? "atspi-events" : "unavailable");
 	cJSON_AddStringToObject(backends, "semanticPress",
@@ -2008,6 +2117,10 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                     environment_capability(indicator_available,
 	                         indicator_available ? "gnome-shell-dbus" : "unavailable",
 	                         0, indicator_available));
+	cJSON_AddItemToObject(capabilities, "frameSettling",
+	                     environment_capability(frame_settle_available,
+	                         frame_settle_available ? "x11-frame-sampling" : "unavailable",
+	                         0, 1));
 	cJSON_AddItemToObject(capabilities, "semanticChangeWait",
 	                     environment_capability(semantic_wait_available,
 	                         semantic_wait_available ? "atspi-events" : "unavailable",
@@ -4070,6 +4183,21 @@ void tools_register_all(void)
 		"  \"required\": [\"captureId\"]"
 		"}",
 		tool_wait_for_semantic_change);
+
+	mcp_register_tool("wait_for_frame_stable",
+		"Wait until a retained get_app_state window remains visually unchanged for a required duration. Revalidates exact X11 identity and geometry, uses normalized source pixels with explicit tolerance, supports MCP cancellation, and never delivers input.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 3000},"
+		"    \"stableMs\": {\"type\": \"integer\", \"minimum\": 20, \"maximum\": 2000, \"default\": 200},"
+		"    \"intervalMs\": {\"type\": \"integer\", \"minimum\": 10, \"maximum\": 500, \"default\": 50},"
+		"    \"tolerance\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 255, \"default\": 0}"
+		"  },"
+		"  \"required\": [\"captureId\"]"
+		"}",
+		tool_wait_for_frame_stable);
 
 	mcp_register_tool("agent_cursor_status",
 		"Report GNOME logical-cursor availability, stage and monitor geometry, and only the cursors owned by this Deskpal process. Indicator state is visual metadata, not proof of delivered input.",

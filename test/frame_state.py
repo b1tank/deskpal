@@ -13,7 +13,7 @@ def main():
         [helper], check=True, capture_output=True, text=True
     )
     output = result.stdout.strip()
-    assert output == "PASS: visual frame signatures and bounded pixel diffs", output
+    assert output == "PASS: visual frame signatures, diffs, and settling", output
     print(output)
 
 
