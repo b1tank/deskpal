@@ -50,7 +50,7 @@ static int store_capture(DeskpalCapture *next, DeskpalCapture *capture)
 	                       (unsigned long long)++sequence);
 	if (written < 0 || (size_t)written >= sizeof(next->id)) return -1;
 	next->created_monotonic_ms = monotonic_ms();
-	free((void *)history[history_next].semantic_snapshot);
+	free(history[history_next].semantic_snapshot);
 	history[history_next] = *next;
 	history_next = (history_next + 1) % CAPTURE_HISTORY_SIZE;
 	*capture = *next;
@@ -139,7 +139,7 @@ int captures_lookup(const char *id, DeskpalCapture *capture)
 void captures_cleanup(void)
 {
 	for (unsigned int i = 0; i < CAPTURE_HISTORY_SIZE; i++)
-		free((void *)history[i].semantic_snapshot);
+		free(history[i].semantic_snapshot);
 	memset(history, 0, sizeof(history));
 	history_next = 0;
 	session_nonce = 0;

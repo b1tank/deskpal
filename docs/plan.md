@@ -140,8 +140,14 @@ broker actions will drive.
   - [x] Ship privacy-safe semantic revisions and bounded same-target element
         diffs through `get_app_state(previousCaptureId)`.
   - [x] Fail semantic diffs closed when either projection is incomplete.
+  - [x] Extract canonical projection, revision, completeness, and diff ownership
+        into `csrc/semantic_state.c` so event-driven observation can reuse it.
   - [x] Compare exact EWMH stacking order around semantic mutations when the
         window manager exposes complete before/after snapshots.
+  - [ ] Prove bounded temporary AT-SPI listener registration, GLib dispatch,
+        cancellation, exact-target filtering, and cleanup before exposing a
+        semantic-change wait tool; use revision polling only if the listener
+        lifecycle cannot be made reliable, and report that fallback truthfully.
 - [ ] Add `backgroundOnly` and `foregroundAllowed` delivery policy plus
       structured `backgroundUnavailable` errors.
 - [ ] Add per-app capability policy, untrusted-content marking, high-impact

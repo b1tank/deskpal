@@ -34,6 +34,7 @@ core_src = files(
   'csrc/uinput.c',
   'csrc/screenshot.c',
   'csrc/captures.c',
+  'csrc/semantic_state.c',
   'csrc/indicator.c',
   'csrc/ocr.c',
   'csrc/tools.c',

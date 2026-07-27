@@ -33,7 +33,7 @@ typedef struct {
 	int image_width;
 	int image_height;
 	char semantic_revision[DESKPAL_SEMANTIC_REVISION_LEN];
-	const char *semantic_snapshot;
+	char *semantic_snapshot;
 	int semantic_complete;
 	int64_t created_monotonic_ms;
 } DeskpalCapture;

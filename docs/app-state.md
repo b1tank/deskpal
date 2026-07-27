@@ -59,6 +59,9 @@ The canonical semantic projection uses complete live locator identity plus role
 and path as its element key. It includes states, actions, bounds, numeric value,
 and selection metadata. Accessible names, free-form text, and attributes never
 enter the revision or diff, even when separately returned by explicit opt-in.
+The reusable projection, revision, completeness, snapshot ownership, and bounded
+comparison rules live in `csrc/semantic_state.c`; future event-driven observation
+must use that module rather than maintaining a second semantic representation.
 
 Revisions are non-cryptographic FNV-1a equality hints only. They are not
 security digests or authorization tokens and never replace fresh complete-
