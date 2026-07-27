@@ -33,7 +33,6 @@ core_src = files(
   'csrc/mcp_transport.c',
   'csrc/x11.c',
   'csrc/uinput.c',
-  'csrc/screenshot.c',
   'csrc/captures.c',
   'csrc/indicator.c',
   'csrc/ocr.c',
@@ -58,6 +57,12 @@ if atspi_dep.found()
   core_deps += [atspi_dep, gobject_dep]
 endif
 
+frame_observation = static_library('frame-observation',
+  files('csrc/screenshot.c', 'csrc/frame_state.c'),
+  include_directories : [vendor_inc, include_directories('csrc')],
+  dependencies : core_deps,
+  c_args : c_args)
+
 semantic_observation = static_library('semantic-observation',
   files('csrc/accessibility.c', 'csrc/semantic_state.c',
         'csrc/semantic_events.c', 'csrc/semantic_change.c'), vendor_src,
@@ -67,12 +72,20 @@ semantic_observation = static_library('semantic-observation',
 
 executable('deskpal',
   core_src,
-  link_with : semantic_observation,
+  link_with : [frame_observation, semantic_observation],
   include_directories : [vendor_inc, include_directories('csrc')],
   dependencies : core_deps,
   c_args : c_args,
   link_args : link_args + ['-ldl'],  # for dlopen
   install : true)
+
+executable('frame-state-test',
+  files('test/frame_state_test.c'),
+  link_with : frame_observation,
+  include_directories : [vendor_inc, include_directories('csrc')],
+  dependencies : core_deps,
+  c_args : c_args,
+  install : false)
 
 # Safe integration helper for the temporary AT-SPI listener lifecycle proof.
 executable('accessibility-event-probe',

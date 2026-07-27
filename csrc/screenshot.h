@@ -10,6 +10,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct {
+	uint8_t *pixels;
+	size_t length;
+	int width;
+	int height;
+	int depth;
+} ScreenshotFrame;
+
+/* Capture normalized four-byte BGRA pixels from an X11 drawable. Depth-24
+ * padding is normalized to opaque alpha; genuine depth-32 alpha is preserved.
+ * Returns 0 on success. Caller must clear the frame. */
+int screenshot_capture_frame(unsigned long wid, ScreenshotFrame *frame);
+void screenshot_frame_clear(ScreenshotFrame *frame);
+
 /* Capture a window as a PNG buffer. Returns malloc'd buffer, sets *out_len.
  * If wid == 0, captures the root window (full screen).
  * Returns NULL on failure. Caller must free(). */

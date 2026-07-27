@@ -27,6 +27,7 @@
     "test:safe": "npm run test:extension && scripts/test-safe.sh",
     "test:indicator": "python3 test/indicator_contract.py",
     "test:extension": "node --experimental-strip-types --check extensions/deskpal.ts",
+    "test:frame-state": "python3 test/frame_state.py",
     "test:indicator-live": "python3 test/e2e_indicator_live.py",
     "test:semantic-visible": "python3 test/e2e_semantic_visible.py",
     "indicator:install": "scripts/indicator.sh install",

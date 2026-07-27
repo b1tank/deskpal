@@ -168,6 +168,12 @@ broker actions will drive.
         into `csrc/semantic_state.c` so event-driven observation can reuse it.
   - [x] Compare exact EWMH stacking order around semantic mutations when the
         window manager exposes complete before/after snapshots.
+  - [x] Add normalized source-frame revisions and a reusable bounded pixel-diff
+        engine with explicit tolerance and non-comparable geometry results; see
+        [`frame-state.md`](frame-state.md).
+  - [ ] Compose capture-bound frame settling with exact-window revalidation,
+        cancellation, stability duration, and truthful timeout results before
+        using frame differences to verify pixel actions.
   - [ ] Prove bounded temporary AT-SPI listener registration, GLib dispatch,
         cancellation, exact-target filtering, and cleanup before exposing a
         semantic-change wait tool; use revision polling only if the listener

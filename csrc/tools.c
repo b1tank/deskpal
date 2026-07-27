@@ -11,6 +11,7 @@
 #include "mcp.h"
 #include "x11.h"
 #include "screenshot.h"
+#include "frame_state.h"
 #include "captures.h"
 #include "semantic_state.h"
 #include "semantic_change.h"
@@ -350,6 +351,8 @@ typedef struct {
 	int source_height;
 	int image_width;
 	int image_height;
+	FrameStateSignature frame_signature;
+	int frame_signature_available;
 } CapturedImage;
 
 static int capture_target_image(unsigned long target, int full_screen,
@@ -358,7 +361,23 @@ static int capture_target_image(unsigned long target, int full_screen,
                                 char *error, size_t error_len)
 {
 	memset(image, 0, sizeof(*image));
-	image->png = screenshot_capture_png(target, &image->png_len);
+	ScreenshotFrame frame;
+	if (screenshot_capture_frame(target, &frame) == 0) {
+		image->source_width = frame.width;
+		image->source_height = frame.height;
+		image->frame_signature_available =
+			frame_state_signature(&frame, &image->frame_signature) == 0;
+		image->png = screenshot_encode_png(
+			frame.pixels, frame.width, frame.height, &image->png_len);
+		screenshot_frame_clear(&frame);
+		if (!image->png) {
+			memset(&image->frame_signature, 0,
+			       sizeof(image->frame_signature));
+			image->frame_signature_available = 0;
+			image->source_width = 0;
+			image->source_height = 0;
+		}
+	}
 
 	if (!image->png && target != 0) {
 		char path[64];
@@ -389,11 +408,24 @@ static int capture_target_image(unsigned long target, int full_screen,
 		snprintf(error, error_len, "Screenshot failed: could not capture window");
 		return -1;
 	}
+	int png_width = 0;
+	int png_height = 0;
 	if (png_dimensions(image->png, image->png_len,
-	                   &image->source_width, &image->source_height) != 0) {
+	                   &png_width, &png_height) != 0) {
 		free(image->png);
 		image->png = NULL;
 		snprintf(error, error_len, "Screenshot failed: invalid PNG dimensions");
+		return -1;
+	}
+	if (image->source_width == 0 && image->source_height == 0) {
+		image->source_width = png_width;
+		image->source_height = png_height;
+	} else if (png_width != image->source_width ||
+	           png_height != image->source_height) {
+		free(image->png);
+		image->png = NULL;
+		snprintf(error, error_len,
+		         "Screenshot failed: raw frame and PNG dimensions differ");
 		return -1;
 	}
 	if (resize_png(&image->png, &image->png_len,
@@ -452,6 +484,11 @@ cJSON *tool_screenshot(const cJSON *params)
 	                       (double)image.source_width / image.image_width);
 	cJSON_AddNumberToObject(metadata, "coordinateScaleY",
 	                       (double)image.source_height / image.image_height);
+	cJSON_AddBoolToObject(metadata, "frameRevisionAvailable",
+	                     image.frame_signature_available);
+	if (image.frame_signature_available)
+		cJSON_AddStringToObject(metadata, "frameRevision",
+		                      image.frame_signature.revision);
 	DeskpalCapture capture = {0};
 	if (full_screen) {
 		if (captures_store_desktop(image.source_width, image.source_height,
@@ -890,6 +927,8 @@ cJSON *tool_get_app_state(const cJSON *params)
 	                                   image.source_width, image.source_height,
 	                                   image.image_width, image.image_height,
 	                                   semantic_snapshot.revision,
+	                                   image.frame_signature_available
+	                                       ? image.frame_signature.revision : "",
 	                                   &semantic_snapshot.window_identity,
 	                                   semantic_snapshot.json,
 	                                   semantic_snapshot.complete,
@@ -962,6 +1001,11 @@ cJSON *tool_get_app_state(const cJSON *params)
 	cJSON_AddBoolToObject(transform, "supported", transform_supported);
 	cJSON_AddItemToObject(state, "transform", transform);
 	if (stable) cJSON_AddStringToObject(state, "captureId", capture.id);
+	cJSON_AddBoolToObject(state, "frameRevisionAvailable",
+	                     image.frame_signature_available);
+	if (image.frame_signature_available)
+		cJSON_AddStringToObject(state, "frameRevision",
+		                      image.frame_signature.revision);
 	cJSON_AddStringToObject(state, "semanticRevision",
 	                      semantic_snapshot.revision);
 	cJSON_AddBoolToObject(state, "semanticProjectionTruncated",

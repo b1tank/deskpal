@@ -249,14 +249,17 @@ def run_suite():
             original = client.tool("screenshot", {"windowName": TITLE})
             assert png_size(original) == (720, 520), png_size(original)
             assert png_is_opaque(original)
-            assert original["screenshot"] == {
+            original_metadata = original["screenshot"].copy()
+            assert original_metadata.pop("frameRevisionAvailable") is True
+            assert original_metadata.pop("frameRevision").startswith("fnv1a64-")
+            assert original_metadata == {
                 "sourceWidth": 720,
                 "sourceHeight": 520,
                 "imageWidth": 720,
                 "imageHeight": 520,
                 "coordinateScaleX": 1,
                 "coordinateScaleY": 1,
-            }, original["screenshot"]
+            }, original_metadata
 
             app_state_result = client.tool(
                 "get_app_state",
@@ -298,6 +301,8 @@ def run_suite():
                 "stable": True,
                 "retryRecommended": False,
             }, app_state
+            assert app_state["frameRevisionAvailable"] is True, app_state
+            assert app_state["frameRevision"].startswith("fnv1a64-"), app_state
             assert app_state["semantic"]["available"] is False, app_state
             assert app_state["semantic"]["includeText"] is False, app_state
             assert app_state["semantic"]["includeAttributes"] is False, app_state

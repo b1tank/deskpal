@@ -41,6 +41,8 @@ A successful observation returns one image plus structured metadata:
 - `image`: source and returned dimensions and image-to-source scale;
 - `transform`: window-local source pixels to desktop/stage coordinates;
 - `captureId`: a short-lived ID bound to the exact target identity and geometry;
+- `frameRevision`: an optional opaque revision of the normalized source pixels,
+  accompanied by `frameRevisionAvailable`;
 - `semantic`: bounded AT-SPI state plus availability, completion, truncation,
   and query-error metadata;
 - `semanticRevision`: an opaque informational structural revision; and
@@ -84,8 +86,9 @@ revalidates it afterward.
   but `consistency.stable` is false,
   `retryRecommended` is true, and no reusable capture ID is issued.
 - Stable observations register the capture ID with target identity, geometry,
-  source/image dimensions, creation time, and the bounded semantic window
-  bus/object identity when a complete root locator is available.
+  source/image dimensions, creation time, optional source-frame revision, and
+  the bounded semantic window bus/object identity when a complete root locator
+  is available.
 - Unknown, stale, evicted, replaced, or geometry-mismatched capture IDs fail
   before any later mutation.
 

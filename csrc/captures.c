@@ -78,6 +78,7 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int source_width, int source_height,
                           int image_width, int image_height,
                           const char *semantic_revision,
+                          const char *frame_revision,
                           const SemanticWindowIdentity *semantic_window,
                           const char *semantic_snapshot,
                           int semantic_complete,
@@ -109,6 +110,9 @@ int captures_store_window(unsigned long window_id, long process_id,
 	int class_written = snprintf(next.app_class, sizeof(next.app_class), "%s", app_class);
 	int revision_written = snprintf(next.semantic_revision,
 		sizeof(next.semantic_revision), "%s", semantic_revision);
+	int frame_written = snprintf(next.frame_revision,
+		sizeof(next.frame_revision), "%s",
+		frame_revision ? frame_revision : "");
 	int bus_written = snprintf(next.semantic_window.bus_name,
 		sizeof(next.semantic_window.bus_name), "%s",
 		semantic_window ? semantic_window->bus_name : "");
@@ -122,6 +126,8 @@ int captures_store_window(unsigned long window_id, long process_id,
 	    class_written < 0 || (size_t)class_written >= sizeof(next.app_class) ||
 	    revision_written < 0 ||
 	    (size_t)revision_written >= sizeof(next.semantic_revision) ||
+	    frame_written < 0 ||
+	    (size_t)frame_written >= sizeof(next.frame_revision) ||
 	    bus_written < 0 ||
 	    (size_t)bus_written >= sizeof(next.semantic_window.bus_name) ||
 	    path_written < 0 ||
