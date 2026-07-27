@@ -23,6 +23,43 @@
    These manipulate the user's visible desktop.
 7. Before committing: `git diff --check`, inspect the complete diff, and verify
    `git status --short` contains only intended files.
+8. Before starting the next milestone, run the maintainability gate below and
+   leave the current milestone as one coherent, tested commit.
+
+## Maintainability gate
+
+Deskpal is long-lived systems software, not a sequence of isolated demos. Every
+feature change must leave the design easier—or at least no harder—to reason
+about. Before declaring a milestone complete:
+
+- inspect the whole affected path, not only the lines needed to make the test
+  pass;
+- look explicitly for duplicated state, identity types, bounds, parsing,
+  cleanup, retry, timeout, and error-reporting logic;
+- reuse one canonical representation and one lifecycle owner instead of adding
+  a parallel abstraction or a second source of truth;
+- extract a cohesive module with a narrow or opaque interface when the next
+  behavior would otherwise enlarge an already broad owner, duplicate logic, or
+  leak test synchronization into production APIs;
+- remove superseded helpers, dead branches, stale comments, obsolete plan
+  items, and redundant tests in the same change that replaces them;
+- keep test helpers linked to the same production implementation where
+  practical; do not maintain a simplified copy that can drift;
+- prefer the smallest grounded interface that supports the proven use case;
+  avoid speculative frameworks, generic wrappers, and mechanical abstraction;
+- make ownership and cleanup explicit for memory, processes, descriptors,
+  listeners, locks, sessions, and global library state, including every error,
+  timeout, cancellation, disconnect, and forced-exit path;
+- preserve bounded work and fail-closed behavior while refactoring; a cleaner
+  shape is not an excuse to weaken identity, privacy, arbitration, or
+  verification guarantees; and
+- update the owning contract, roadmap, and test-scope documentation so completed
+  work, remaining gates, and known caveats do not become stale.
+
+Do the refactor before stacking another milestone when a local proof has exposed
+the right boundary. Do not schedule broad cleanup merely for aesthetics: every
+restructure needs a concrete ownership, duplication, coupling, drift, safety, or
+testability reason and must remain independently verifiable.
 
 ## Invariants
 

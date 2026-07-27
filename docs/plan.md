@@ -45,6 +45,30 @@ independent.
 The broker must enforce app/surface permissions independently from Deskpal and
 must not expose arbitrary compositor scripting.
 
+## Engineering quality guardrail
+
+The roadmap is cumulative: a checked box must not leave behind a second identity
+model, lifecycle owner, parser, timeout policy, cleanup path, or test-only copy
+for later phases to work around. At every milestone boundary:
+
+1. review the complete affected path for duplication, stale code/docs, unclear
+   ownership, over-broad modules, and test/production drift;
+2. refactor immediately when the completed proof reveals a concrete reusable
+   boundary or when the next slice would otherwise copy or further entangle the
+   existing implementation;
+3. remove the superseded path in the same change and keep one canonical source
+   of truth;
+4. keep interfaces narrow, state and cleanup ownership explicit, work bounded,
+   and failure behavior closed; and
+5. finish with deterministic tests, sanitizer coverage where required, current
+   contracts/roadmap, a complete diff review, and one coherent commit before
+   starting the next milestone.
+
+Refactoring is not a periodic rewrite and abstraction is not a goal by itself.
+Restructure only for an observed maintainability or reliability reason, make the
+smallest defensible change, and preserve the product's identity, privacy,
+arbitration, side-effect, and verification guarantees throughout.
+
 ## Action routing
 
 Use the first route that can satisfy and verify the requested behavior:

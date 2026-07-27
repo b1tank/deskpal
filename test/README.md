@@ -146,6 +146,11 @@ The live baseline and known host gaps are recorded in
 5. Add a regression that fails before the fix.
 6. Run `npm test`, then `npm run test:asan` for memory-sensitive changes.
 7. Use live tests only for behavior impossible to prove in nested Xvfb.
+8. At milestone boundaries, review the complete affected path for duplicated
+   production logic, copied test implementations, stale helpers/contracts,
+   unclear resource ownership, and modules that gained unrelated responsibilities.
+   Refactor or delete the superseded path before stacking the next feature, then
+   rerun the same deterministic and sanitizer evidence against the final shape.
 
 Never route a private test through host `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`,
 D-Bus, or `/dev/uinput`. A test that can move the user's real pointer is not a
