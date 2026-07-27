@@ -30,6 +30,10 @@ cJSON *mcp_tool_error_result(const char *text);
 /* Build an image content response (base64 PNG). Caller owns result. */
 cJSON *mcp_image_result(const char *base64_png, const char *mime);
 
+/* Serialize a payload as text and attach the owned object as structured
+ * metadata. Caller owns the returned tool result. */
+cJSON *mcp_structured_tool_result(cJSON *payload, const char *metadata_key);
+
 /* Build a JSON-RPC error response. Caller owns result. */
 cJSON *mcp_error(int code, const char *message);
 

@@ -51,6 +51,7 @@ static int store_capture(DeskpalCapture *next, DeskpalCapture *capture)
 	if (written < 0 || (size_t)written >= sizeof(next->id)) return -1;
 	next->created_monotonic_ms = monotonic_ms();
 	free(history[history_next].semantic_snapshot);
+	free(history[history_next].frame_projection);
 	history[history_next] = *next;
 	history_next = (history_next + 1) % CAPTURE_HISTORY_SIZE;
 	*capture = *next;
@@ -79,6 +80,7 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int image_width, int image_height,
                           const char *semantic_revision,
                           const char *frame_revision,
+                          const ScreenshotFrame *frame_projection,
                           const SemanticWindowIdentity *semantic_window,
                           const char *semantic_snapshot,
                           int semantic_complete,
@@ -122,6 +124,23 @@ int captures_store_window(unsigned long window_id, long process_id,
 	next.semantic_window.process_id = semantic_window
 		? semantic_window->process_id : 0;
 	char *snapshot_copy = strdup(semantic_snapshot);
+	uint8_t *projection_copy = NULL;
+	int projection_requested = frame_projection != NULL;
+	int projection_valid = !projection_requested ||
+		(frame_projection->pixels && frame_projection->length > 0 &&
+		 frame_projection->length <= DESKPAL_FRAME_PROJECTION_MAX_BYTES &&
+		 frame_projection->width > 0 &&
+		 frame_projection->width <= DESKPAL_FRAME_PROJECTION_MAX_DIMENSION &&
+		 frame_projection->height > 0 &&
+		 frame_projection->height <= DESKPAL_FRAME_PROJECTION_MAX_DIMENSION &&
+		 frame_projection->length == (size_t)frame_projection->width *
+		                             (size_t)frame_projection->height * 4);
+	if (projection_requested && projection_valid) {
+		projection_copy = malloc(frame_projection->length);
+		if (projection_copy)
+			memcpy(projection_copy, frame_projection->pixels,
+			       frame_projection->length);
+	}
 	if (title_written < 0 || (size_t)title_written >= sizeof(next.title) ||
 	    class_written < 0 || (size_t)class_written >= sizeof(next.app_class) ||
 	    revision_written < 0 ||
@@ -133,17 +152,26 @@ int captures_store_window(unsigned long window_id, long process_id,
 	    path_written < 0 ||
 	    (size_t)path_written >=
 	        sizeof(next.semantic_window.window_object_path) ||
-	    !snapshot_copy) {
+	    !snapshot_copy || !projection_valid ||
+	    (projection_requested && !projection_copy)) {
 		free(snapshot_copy);
+		free(projection_copy);
 		return -1;
 	}
 	next.semantic_snapshot = snapshot_copy;
 	next.semantic_complete = semantic_complete;
+	if (projection_copy) {
+		next.frame_projection = projection_copy;
+		next.frame_projection_len = frame_projection->length;
+		next.frame_projection_width = frame_projection->width;
+		next.frame_projection_height = frame_projection->height;
+	}
 	next.semantic_max_depth = semantic_max_depth;
 	next.semantic_max_nodes = semantic_max_nodes;
 	next.semantic_include_offscreen = semantic_include_offscreen;
 	if (store_capture(&next, capture) != 0) {
 		free(snapshot_copy);
+		free(projection_copy);
 		return -1;
 	}
 	return 0;
@@ -166,8 +194,10 @@ int captures_lookup(const char *id, DeskpalCapture *capture)
 
 void captures_cleanup(void)
 {
-	for (unsigned int i = 0; i < CAPTURE_HISTORY_SIZE; i++)
+	for (unsigned int i = 0; i < CAPTURE_HISTORY_SIZE; i++) {
 		free(history[i].semantic_snapshot);
+		free(history[i].frame_projection);
+	}
 	memset(history, 0, sizeof(history));
 	history_next = 0;
 	session_nonce = 0;

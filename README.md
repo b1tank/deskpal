@@ -17,6 +17,7 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 | `get_app_state` | Capture one exact X11/Xwayland window with stable identity, image transform, bounded semantics, revision, and optional diff |
 | `wait_for_semantic_change` | Wait cancellably from a stable app-state capture for a canonical semantic revision change and bounded diff without delivering input |
 | `wait_for_frame_stable` | Wait cancellably until an exact captured window remains visually stable for a required duration, with bounded tolerance and transition summaries |
+| `verify_frame_change` | Verify a caller-specified source-pixel region changed from a retained capture after settling, while reporting unrelated outside-region change separately |
 | `get_focused_element` | Return the true focused AT-SPI child within a required application/window scope; ambiguous results fail closed |
 | `accessibility_action` | Perform verified semantic `setText`, `focus`, or named `invoke` on one uniquely resolved accessible element |
 | `find_window` | Find a window by title substring |

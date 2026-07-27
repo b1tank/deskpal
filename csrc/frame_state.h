@@ -34,11 +34,25 @@ typedef struct {
 int frame_state_signature(const ScreenshotFrame *frame,
                           FrameStateSignature *signature);
 
+/* Build a bounded aspect-preserving box-average projection. Does not upscale.
+ * The caller owns output through screenshot_frame_clear. */
+int frame_state_project(const ScreenshotFrame *frame,
+                        int max_width, int max_height,
+                        ScreenshotFrame *output);
+
 /* Compare normalized BGRA frames. A pixel changes when any channel delta is
  * greater than tolerance (0-255). Different dimensions are not comparable. */
 int frame_state_compare(const ScreenshotFrame *before,
                         const ScreenshotFrame *after,
                         int tolerance,
                         FrameStateDiff *diff);
+
+/* Compare pixels inside and outside one projection-space rectangle. */
+int frame_state_compare_region(const ScreenshotFrame *before,
+                               const ScreenshotFrame *after,
+                               int tolerance,
+                               int x, int y, int width, int height,
+                               FrameStateDiff *inside,
+                               FrameStateDiff *outside);
 
 #endif /* DESKPAL_FRAME_STATE_H */

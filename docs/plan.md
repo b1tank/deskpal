@@ -174,8 +174,12 @@ broker actions will drive.
   - [x] Ship capture-bound `wait_for_frame_stable` with anchor-based stability,
         exact-window revalidation, cancellation, bounded sampling/tolerance,
         transition summaries, and truthful timeout/error results.
-  - [ ] Bind before/after stable frames to pixel actions and explicit visual
-        postconditions before claiming capture-bound pixel verification.
+  - [x] Ship `verify_frame_change` for explicit source-region postconditions
+        against bounded retained projections, with inside/outside thresholds and
+        truthful `actionAttributed: false` reporting.
+  - [ ] Bind before/after stable frames, one approved delivery route, and an
+        explicit visual postcondition into a single operation before claiming
+        that a pixel action caused the verified change.
   - [ ] Prove bounded temporary AT-SPI listener registration, GLib dispatch,
         cancellation, exact-target filtering, and cleanup before exposing a
         semantic-change wait tool; use revision polling only if the listener

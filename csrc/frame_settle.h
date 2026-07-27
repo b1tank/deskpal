@@ -28,6 +28,7 @@ typedef enum {
 typedef struct {
 	FrameSettleStatus status;
 	FrameStateSignature final_signature;
+	ScreenshotFrame final_projection;
 	FrameStateDiff last_change;
 	FrameStateDiff largest_change;
 	int sample_count;
@@ -54,5 +55,7 @@ int frame_settle_wait(
 	FrameSettleCancelCheck cancel_check,
 	void *cancel_data,
 	FrameSettleResult *result);
+
+void frame_settle_result_clear(FrameSettleResult *result);
 
 #endif /* DESKPAL_FRAME_SETTLE_H */

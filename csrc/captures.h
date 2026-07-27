@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "frame_revision.h"
+#include "screenshot.h"
 #include "semantic_identity.h"
 
 #define DESKPAL_CAPTURE_ID_LEN 64
@@ -37,6 +38,10 @@ typedef struct {
 	int image_height;
 	char semantic_revision[DESKPAL_SEMANTIC_REVISION_LEN];
 	char frame_revision[DESKPAL_FRAME_REVISION_LEN];
+	uint8_t *frame_projection;
+	size_t frame_projection_len;
+	int frame_projection_width;
+	int frame_projection_height;
 	SemanticWindowIdentity semantic_window;
 	char *semantic_snapshot;
 	int semantic_complete;
@@ -60,6 +65,7 @@ int captures_store_window(unsigned long window_id, long process_id,
                           int image_width, int image_height,
                           const char *semantic_revision,
                           const char *frame_revision,
+                          const ScreenshotFrame *frame_projection,
                           const SemanticWindowIdentity *semantic_window,
                           const char *semantic_snapshot,
                           int semantic_complete,

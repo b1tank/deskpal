@@ -97,6 +97,12 @@ int main(void)
 	CHECK(diff.changed_fraction == 0.25);
 	CHECK(frame_state_compare(&first, &same, 3, &diff) == 0);
 	CHECK(diff.comparable && !diff.changed && diff.max_channel_delta == 3);
+	FrameStateDiff inside;
+	FrameStateDiff outside;
+	CHECK(frame_state_compare_region(
+		&first, &same, 0, 0, 1, 1, 1, &inside, &outside) == 0);
+	CHECK(inside.changed && inside.changed_pixels == 1 && inside.total_pixels == 1);
+	CHECK(!outside.changed && outside.total_pixels == 3);
 
 	uint8_t small_pixels[4] = {10, 20, 30, 255};
 	ScreenshotFrame small = {
@@ -108,6 +114,19 @@ int main(void)
 	};
 	CHECK(frame_state_compare(&first, &small, 0, &diff) == 0);
 	CHECK(!diff.comparable && diff.changed);
+	ScreenshotFrame projection;
+	CHECK(frame_state_project(&first, 1, 1, &projection) == 0);
+	CHECK(projection.width == 1 && projection.height == 1);
+	CHECK(projection.pixels[0] == 55 && projection.pixels[1] == 65 &&
+	      projection.pixels[2] == 75 && projection.pixels[3] == 255);
+	ScreenshotFrame same_projection;
+	CHECK(frame_state_project(&same, 1, 1, &same_projection) == 0);
+	CHECK(frame_state_compare_region(
+		&projection, &same_projection, 0, 0, 0, 1, 1,
+		&inside, &outside) == 0);
+	CHECK(inside.changed && outside.total_pixels == 0);
+	screenshot_frame_clear(&same_projection);
+	screenshot_frame_clear(&projection);
 	CHECK(frame_state_compare(&first, &same, -1, &diff) == -1);
 	CHECK(frame_state_signature(NULL, &first_signature) == -1);
 
@@ -134,6 +153,8 @@ int main(void)
 	CHECK(settled.status == FRAME_SETTLE_SETTLED);
 	CHECK(settled.change_count == 1 && settled.changed_from_capture);
 	CHECK(settled.stable_for_ms >= 30 && settled.sample_count >= 5);
+	CHECK(settled.final_projection.pixels != NULL);
+	frame_settle_result_clear(&settled);
 
 	const int static_values[] = {0};
 	fixture.values = static_values;
@@ -144,6 +165,7 @@ int main(void)
 		100, 20, 0, validate_fixture, capture_fixture, &fixture,
 		cancel_fixture, &fixture, &settled) == 0);
 	CHECK(settled.status == FRAME_SETTLE_TIMEOUT);
+	frame_settle_result_clear(&settled);
 
 	fixture.index = 0;
 	fixture.cancel = 1;
@@ -152,6 +174,7 @@ int main(void)
 		30, 10, 0, validate_fixture, capture_fixture, &fixture,
 		cancel_fixture, &fixture, &settled) == 0);
 	CHECK(settled.status == FRAME_SETTLE_CANCELLED);
+	frame_settle_result_clear(&settled);
 
 	puts("PASS: visual frame signatures, diffs, and settling");
 	return 0;

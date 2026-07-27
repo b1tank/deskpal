@@ -86,9 +86,9 @@ revalidates it afterward.
   but `consistency.stable` is false,
   `retryRecommended` is true, and no reusable capture ID is issued.
 - Stable observations register the capture ID with target identity, geometry,
-  source/image dimensions, creation time, optional source-frame revision, and
-  the bounded semantic window bus/object identity when a complete root locator
-  is available.
+  source/image dimensions, creation time, optional source-frame revision, a
+  bounded visual projection when raw pixels are available, and the semantic
+  window bus/object identity when a complete root locator is available.
 - Unknown, stale, evicted, replaced, or geometry-mismatched capture IDs fail
   before any later mutation.
 
@@ -109,7 +109,9 @@ it can also be passed to `wait_for_semantic_change`, which preserves the origina
 semantic depth/node/offscreen bounds and returns only after a canonical revision
 change, timeout, or cancellation. Captures with `frameRevisionAvailable: true`
 can be passed to `wait_for_frame_stable` for bounded, cancellable source-pixel
-settling under exact identity and geometry revalidation.
+settling under exact identity and geometry revalidation, or to
+`verify_frame_change` with an explicit source-pixel region. The latter verifies
+a visual postcondition but does not attribute it to a particular action.
 
 The first implementation supports one monitor covering the full GNOME stage.
 Other layouts return a structured unsupported result until per-monitor capture

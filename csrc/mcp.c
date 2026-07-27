@@ -57,6 +57,7 @@ void mcp_register_tool(const char *name, const char *description,
 	    strcmp(name, "accessibility_action") != 0 &&
 	    strcmp(name, "wait_for_semantic_change") != 0 &&
 	    strcmp(name, "wait_for_frame_stable") != 0 &&
+	    strcmp(name, "verify_frame_change") != 0 &&
 	    strcmp(name, "agent_semantic_press") != 0 &&
 	    strcmp(name, "agent_semantic_set_text") != 0 &&
 	    strcmp(name, "agent_semantic_set_value") != 0 &&
@@ -130,6 +131,23 @@ cJSON *mcp_image_result(const char *base64_png, const char *mime)
 	cJSON_AddStringToObject(item, "mimeType", mime ? mime : "image/png");
 	cJSON_AddItemToArray(content, item);
 	cJSON_AddItemToObject(result, "content", content);
+	return result;
+}
+
+cJSON *mcp_structured_tool_result(cJSON *payload, const char *metadata_key)
+{
+	if (!payload || !metadata_key) {
+		cJSON_Delete(payload);
+		return mcp_tool_error_result("Could not build structured tool result");
+	}
+	char *text = cJSON_PrintUnformatted(payload);
+	if (!text) {
+		cJSON_Delete(payload);
+		return mcp_tool_error_result("Could not serialize tool result");
+	}
+	cJSON *result = mcp_text_result(text);
+	free(text);
+	cJSON_AddItemToObject(result, metadata_key, payload);
 	return result;
 }
 
@@ -219,6 +237,15 @@ static cJSON *handle_tools_list(void)
 	cJSON *tools = mcp_tools_list();
 	cJSON_AddItemToObject(result, "tools", tools);
 	return result;
+}
+
+static int number_in_range(const cJSON *arguments, const char *key,
+                           double minimum, double maximum)
+{
+	const cJSON *item = arguments ? cJSON_GetObjectItem(arguments, key) : NULL;
+	return !item || (cJSON_IsNumber(item) && isfinite(item->valuedouble) &&
+	                 item->valuedouble >= minimum &&
+	                 item->valuedouble <= maximum);
 }
 
 static int integer_in_range(const cJSON *arguments, const char *key,
@@ -371,6 +398,34 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 	    (!integer_in_range(arguments, "maxWidth", 0, 8192) ||
 	     !integer_in_range(arguments, "maxHeight", 0, 8192)))
 		return mcp_tool_error_result("maxWidth/maxHeight must be integers between 0 and 8192");
+	if (strcmp(tool_name, "verify_frame_change") == 0) {
+		const cJSON *region = arguments
+			? cJSON_GetObjectItem(arguments, "region") : NULL;
+		if (!bounded_string_if_present(arguments, "captureId", 63) ||
+		    !cJSON_GetObjectItem(arguments, "captureId") ||
+		    !region || !cJSON_IsObject(region) ||
+		    !integer_in_range(region, "x", 0, 32768) ||
+		    !integer_in_range(region, "y", 0, 32768) ||
+		    !integer_in_range(region, "width", 1, 32768) ||
+		    !integer_in_range(region, "height", 1, 32768) ||
+		    !cJSON_GetObjectItem(region, "x") ||
+		    !cJSON_GetObjectItem(region, "y") ||
+		    !cJSON_GetObjectItem(region, "width") ||
+		    !cJSON_GetObjectItem(region, "height") ||
+		    !number_in_range(arguments, "minChangedFraction", 0.000001, 1.0) ||
+		    !number_in_range(arguments, "maxOutsideChangedFraction", 0.0, 1.0) ||
+		    !integer_in_range(arguments, "timeoutMs", 1, 5000) ||
+		    !integer_in_range(arguments, "stableMs", 20, 2000) ||
+		    !integer_in_range(arguments, "intervalMs", 10, 500) ||
+		    !integer_in_range(arguments, "tolerance", 0, 255))
+			return mcp_tool_error_result(
+				"verify_frame_change has invalid capture, source region, visual threshold, or settling fields");
+		const cJSON *timeout = cJSON_GetObjectItem(arguments, "timeoutMs");
+		const cJSON *stable = cJSON_GetObjectItem(arguments, "stableMs");
+		if ((stable ? stable->valueint : 200) >
+		    (timeout ? timeout->valueint : 3000))
+			return mcp_tool_error_result("stableMs cannot exceed timeoutMs");
+	}
 	if (strcmp(tool_name, "wait_for_frame_stable") == 0) {
 		if (!bounded_string_if_present(arguments, "captureId", 63) ||
 		    !cJSON_GetObjectItem(arguments, "captureId") ||
@@ -742,6 +797,7 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "accessibility_action") != 0 &&
 		strcmp(tool_name, "wait_for_semantic_change") != 0 &&
 		strcmp(tool_name, "wait_for_frame_stable") != 0 &&
+		strcmp(tool_name, "verify_frame_change") != 0 &&
 		strcmp(tool_name, "agent_semantic_press") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_text") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_value") != 0 &&
@@ -757,6 +813,7 @@ static cJSON *handle_tools_call(const cJSON *params)
 	     strcmp(tool_name, "accessibility_action") == 0 ||
 	     strcmp(tool_name, "wait_for_semantic_change") == 0 ||
 	     strcmp(tool_name, "wait_for_frame_stable") == 0 ||
+	     strcmp(tool_name, "verify_frame_change") == 0 ||
 	     strcmp(tool_name, "agent_semantic_press") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_text") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_value") == 0 ||

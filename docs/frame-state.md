@@ -24,7 +24,9 @@ rescaled.
 `get_app_state` and X11-backed screenshots report `frameRevision` when the raw
 source frame was available. Fallback captures that only produce a PNG report
 `frameRevisionAvailable: false`. Stable app-state captures retain the source
-frame revision for later capture-bound frame settling and visual verification.
+frame revision plus an aspect-preserving box-average projection bounded to
+256x256 pixels (at most 256 KiB per retained capture) for later settling and
+visual verification. Raw source frames are not retained in capture history.
 
 `wait_for_frame_stable` accepts a retained stable `get_app_state` capture and
 samples its normalized source pixels under one absolute deadline. It validates
@@ -46,7 +48,17 @@ unsettled result; cancellation is interrupted; changed geometry, unsupported
 pixels, capture failure, and non-comparable frames fail closed. The tool never
 delivers input or changes focus, stacking, pointer, or clipboard state.
 
-This milestone does not yet use frame settling to claim that a pixel action
-succeeded. Pixel verification must additionally bind an action to before/after
-captures, define the expected changed region or visual postcondition, and report
-background-route side effects.
+`verify_frame_change` settles the exact window, compares its final bounded
+projection with the retained projection, and evaluates an explicit source-pixel
+region. Callers set the minimum changed fraction inside that region and maximum
+allowed changed fraction outside it. Results expose the projection dimensions,
+box-average sampling, and inside/outside summaries so coarse projection limits
+are visible rather than hidden. Very small or high-frequency changes may be
+smoothed by projection and require a larger region or lower threshold.
+
+This verification proves only that the requested visual postcondition is true
+relative to the capture. It returns `actionAttributed: false`: a separate action
+may have occurred between capture and verification, and Deskpal does not claim
+causality. Full pixel-action verification must execute one explicitly approved
+delivery route and visual postcondition as a single orchestrated operation while
+reporting that route's pointer, focus, stacking, and clipboard side effects.

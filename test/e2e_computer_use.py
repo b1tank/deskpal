@@ -95,6 +95,9 @@ def run_suite():
             frame_settle_schema = tool_by_name(
                 tools, "wait_for_frame_stable"
             )["inputSchema"]
+            frame_verify_schema = tool_by_name(
+                tools, "verify_frame_change"
+            )["inputSchema"]
             tool_by_name(tools, "agent_cursor_status")
             tool_by_name(tools, "agent_cursor_hide")
             release_schema = tool_by_name(tools, "release_control")["inputSchema"]
@@ -112,6 +115,9 @@ def run_suite():
             assert frame_settle_schema["required"] == ["captureId"]
             assert frame_settle_schema["properties"]["stableMs"]["default"] == 200
             assert "sessionId" not in frame_settle_schema["properties"]
+            assert frame_verify_schema["required"] == ["captureId", "region"]
+            assert frame_verify_schema["properties"]["minChangedFraction"]["default"] == 0.001
+            assert "sessionId" not in frame_verify_schema["properties"]
 
             cancel_started = time.monotonic()
             cancelled_id = client.send_request(
@@ -511,6 +517,11 @@ def run_suite():
             assert "Deskpal computer use" in initial_ocr, initial_ocr
             assert "Apply Text" in initial_ocr, initial_ocr
 
+            client.tool("focus_window", {"windowName": TITLE})
+            visual_base = client.tool(
+                "get_app_state", {"windowName": TITLE}
+            )["appState"]
+            assert "captureId" in visual_base, visual_base
             clicked_entry = text(
                 client.tool("click", {"windowName": TITLE, "x": 360, "y": 100})
             )
@@ -524,6 +535,44 @@ def run_suite():
                 client.tool("click_text", {"windowName": TITLE, "text": "Apply Text"})
             )
             assert "Clicked" in applied, applied
+            visual_verification = client.tool(
+                "verify_frame_change",
+                {
+                    "captureId": visual_base["captureId"],
+                    "region": {"x": 80, "y": 50, "width": 560, "height": 220},
+                    "minChangedFraction": 0.0001,
+                    "timeoutMs": 1500,
+                    "stableMs": 100,
+                    "intervalMs": 20,
+                },
+            )
+            verification = visual_verification["frameVerification"]
+            assert visual_verification.get("isError") is not True, verification
+            assert verification["status"] == "verified", verification
+            assert verification["untrustedContent"] is True, verification
+            assert verification["verified"] is True, verification
+            assert verification["insideRegion"]["changed"] is True, verification
+            assert verification["actionAttributed"] is False, verification
+            assert verification["inputDelivered"] is False, verification
+
+            no_change_base = client.tool(
+                "get_app_state", {"windowName": TITLE}
+            )["appState"]
+            no_change_verification = client.tool(
+                "verify_frame_change",
+                {
+                    "captureId": no_change_base["captureId"],
+                    "region": {"x": 80, "y": 50, "width": 560, "height": 220},
+                    "minChangedFraction": 0.01,
+                    "timeoutMs": 500,
+                    "stableMs": 100,
+                    "intervalMs": 20,
+                },
+            )
+            assert no_change_verification.get("isError") is True
+            assert no_change_verification["frameVerification"]["status"] == (
+                "postcondition_failed"
+            )
             updated = text(client.tool("read_screen_text", {"windowName": TITLE}))
             assert "typed by deskpal" in updated, updated
 

@@ -179,8 +179,23 @@ int frame_settle_wait(
 
 	result->changed_from_capture = strcmp(
 		base->frame_revision, result->final_signature.revision) != 0;
+	if (frame_state_project(
+	    &anchor, DESKPAL_FRAME_PROJECTION_MAX_DIMENSION,
+	    DESKPAL_FRAME_PROJECTION_MAX_DIMENSION,
+	    &result->final_projection) != 0 &&
+	    result->status == FRAME_SETTLE_SETTLED) {
+		result->status = FRAME_SETTLE_CAPTURE_FAILED;
+		set_error(result, "Could not project final settled frame");
+	}
 	screenshot_frame_clear(&anchor);
 	return result->status == FRAME_SETTLE_SETTLED ? 1 :
 	       result->status == FRAME_SETTLE_TIMEOUT ||
 	       result->status == FRAME_SETTLE_CANCELLED ? 0 : -1;
+}
+
+void frame_settle_result_clear(FrameSettleResult *result)
+{
+	if (!result) return;
+	screenshot_frame_clear(&result->final_projection);
+	memset(result, 0, sizeof(*result));
 }

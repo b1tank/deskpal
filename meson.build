@@ -34,6 +34,8 @@ core_src = files(
   'csrc/x11.c',
   'csrc/uinput.c',
   'csrc/captures.c',
+  'csrc/capture_target.c',
+  'csrc/frame_tools.c',
   'csrc/indicator.c',
   'csrc/ocr.c',
   'csrc/tools.c',

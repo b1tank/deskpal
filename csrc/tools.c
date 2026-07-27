@@ -12,8 +12,9 @@
 #include "x11.h"
 #include "screenshot.h"
 #include "frame_state.h"
-#include "frame_settle.h"
 #include "captures.h"
+#include "capture_target.h"
+#include "frame_tools.h"
 #include "semantic_state.h"
 #include "semantic_change.h"
 #include "indicator.h"
@@ -51,15 +52,6 @@ static int json_int(const cJSON *obj, const char *key, int def)
 	if (item && cJSON_IsNumber(item)) return item->valueint;
 	return def;
 }
-
-/* json_double available if needed in future tools
-static double json_double(const cJSON *obj, const char *key, double def)
-{
-	const cJSON *item = cJSON_GetObjectItem(obj, key);
-	if (item && cJSON_IsNumber(item)) return item->valuedouble;
-	return def;
-}
-*/
 
 static int json_bool(const cJSON *obj, const char *key, int def)
 {
@@ -354,7 +346,16 @@ typedef struct {
 	int image_height;
 	FrameStateSignature frame_signature;
 	int frame_signature_available;
+	ScreenshotFrame frame_projection;
 } CapturedImage;
+
+static void captured_image_clear(CapturedImage *image)
+{
+	if (!image) return;
+	free(image->png);
+	screenshot_frame_clear(&image->frame_projection);
+	memset(image, 0, sizeof(*image));
+}
 
 static int capture_target_image(unsigned long target, int full_screen,
                                 int max_width, int max_height,
@@ -368,6 +369,12 @@ static int capture_target_image(unsigned long target, int full_screen,
 		image->source_height = frame.height;
 		image->frame_signature_available =
 			frame_state_signature(&frame, &image->frame_signature) == 0;
+		if (frame_state_project(
+		    &frame, DESKPAL_FRAME_PROJECTION_MAX_DIMENSION,
+		    DESKPAL_FRAME_PROJECTION_MAX_DIMENSION,
+		    &image->frame_projection) != 0)
+			memset(&image->frame_projection, 0,
+			       sizeof(image->frame_projection));
 		image->png = screenshot_encode_png(
 			frame.pixels, frame.width, frame.height, &image->png_len);
 		screenshot_frame_clear(&frame);
@@ -377,6 +384,7 @@ static int capture_target_image(unsigned long target, int full_screen,
 			image->frame_signature_available = 0;
 			image->source_width = 0;
 			image->source_height = 0;
+			screenshot_frame_clear(&image->frame_projection);
 		}
 	}
 
@@ -413,8 +421,7 @@ static int capture_target_image(unsigned long target, int full_screen,
 	int png_height = 0;
 	if (png_dimensions(image->png, image->png_len,
 	                   &png_width, &png_height) != 0) {
-		free(image->png);
-		image->png = NULL;
+		captured_image_clear(image);
 		snprintf(error, error_len, "Screenshot failed: invalid PNG dimensions");
 		return -1;
 	}
@@ -423,8 +430,7 @@ static int capture_target_image(unsigned long target, int full_screen,
 		image->source_height = png_height;
 	} else if (png_width != image->source_width ||
 	           png_height != image->source_height) {
-		free(image->png);
-		image->png = NULL;
+		captured_image_clear(image);
 		snprintf(error, error_len,
 		         "Screenshot failed: raw frame and PNG dimensions differ");
 		return -1;
@@ -433,8 +439,7 @@ static int capture_target_image(unsigned long target, int full_screen,
 	               image->source_width, image->source_height,
 	               max_width, max_height,
 	               &image->image_width, &image->image_height) != 0) {
-		free(image->png);
-		image->png = NULL;
+		captured_image_clear(image);
 		snprintf(error, error_len,
 		         "Screenshot downscaling failed. Ensure ImageMagick 'convert' is installed");
 		return -1;
@@ -468,8 +473,10 @@ cJSON *tool_screenshot(const cJSON *params)
 
 	char *b64 = screenshot_base64_encode(image.png, image.png_len);
 	free(image.png);
+	image.png = NULL;
 
 	if (!b64) {
+		captured_image_clear(&image);
 		return mcp_text_result("Screenshot failed: base64 encoding error");
 	}
 
@@ -496,6 +503,7 @@ cJSON *tool_screenshot(const cJSON *params)
 		                           image.image_width, image.image_height, &capture) != 0) {
 			cJSON_Delete(metadata);
 			cJSON_Delete(result);
+			captured_image_clear(&image);
 			return mcp_tool_error_result("Could not assign screenshot capture ID");
 		}
 		cJSON_AddStringToObject(metadata, "captureId", capture.id);
@@ -532,6 +540,7 @@ cJSON *tool_screenshot(const cJSON *params)
 		cJSON_AddStringToObject(text_item, "text", note);
 		cJSON_AddItemToArray(content, text_item);
 	}
+	captured_image_clear(&image);
 	return result;
 }
 
@@ -539,19 +548,6 @@ cJSON *tool_screenshot(const cJSON *params)
 
 #define INDICATOR_STATUS_LIMIT (64 * 1024)
 #define INDICATOR_SETTLE_TIMEOUT_MS 1200
-
-static cJSON *structured_text_result(cJSON *payload, const char *metadata_key)
-{
-	char *text = cJSON_PrintUnformatted(payload);
-	if (!text) {
-		cJSON_Delete(payload);
-		return mcp_tool_error_result("Could not serialize indicator result");
-	}
-	cJSON *result = mcp_text_result(text);
-	free(text);
-	cJSON_AddItemToObject(result, metadata_key, payload);
-	return result;
-}
 
 static int resolve_app_state_target(const cJSON *params, WindowInfo *target,
                                     const char **error_code,
@@ -798,7 +794,7 @@ static cJSON *app_state_error_result(const char *code, const char *message,
 	cJSON_AddStringToObject(payload, "code", code);
 	cJSON_AddStringToObject(payload, "message", message);
 	cJSON_AddBoolToObject(payload, "retryRecommended", retry_recommended);
-	cJSON *result = structured_text_result(payload, "appStateError");
+	cJSON *result = mcp_structured_tool_result(payload, "appStateError");
 	cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
@@ -854,7 +850,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 	filter_semantic_process(semantic, before.pid);
 	SemanticStateSnapshot semantic_snapshot = {0};
 	if (semantic_state_build(semantic, &semantic_snapshot) != 0) {
-		free(image.png);
+		captured_image_clear(&image);
 		cJSON_Delete(semantic);
 		return mcp_tool_error_result(
 			"Canonical semantic projection exceeded its 256 KiB safety limit");
@@ -865,7 +861,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 		params, &after, &target_error_code, error, sizeof(error)) == 0;
 	unsigned long focused_after = x11_get_active_window();
 	if (!resolved_after || !same_window_identity(&before, &after)) {
-		free(image.png);
+		captured_image_clear(&image);
 		semantic_state_clear(&semantic_snapshot);
 		cJSON_Delete(semantic);
 		return app_state_error_result("target_replaced_during_observation",
@@ -907,7 +903,7 @@ cJSON *tool_get_app_state(const cJSON *params)
 		} else {
 			diff = semantic_state_diff(&previous_capture, &semantic_snapshot);
 			if (!diff) {
-				free(image.png);
+				captured_image_clear(&image);
 				semantic_state_clear(&semantic_snapshot);
 				cJSON_Delete(semantic);
 				cJSON_Delete(semantic_transform);
@@ -930,12 +926,14 @@ cJSON *tool_get_app_state(const cJSON *params)
 	                                   semantic_snapshot.revision,
 	                                   image.frame_signature_available
 	                                       ? image.frame_signature.revision : "",
+	                                   image.frame_projection.pixels
+	                                       ? &image.frame_projection : NULL,
 	                                   &semantic_snapshot.window_identity,
 	                                   semantic_snapshot.json,
 	                                   semantic_snapshot.complete,
 	                                   max_depth, max_nodes, include_offscreen,
 	                                   &capture) != 0) {
-		free(image.png);
+		captured_image_clear(&image);
 		semantic_state_clear(&semantic_snapshot);
 		cJSON_Delete(diff);
 		cJSON_Delete(semantic);
@@ -945,6 +943,8 @@ cJSON *tool_get_app_state(const cJSON *params)
 
 	char *base64 = screenshot_base64_encode(image.png, image.png_len);
 	free(image.png);
+	image.png = NULL;
+	screenshot_frame_clear(&image.frame_projection);
 	if (!base64) {
 		semantic_state_clear(&semantic_snapshot);
 		cJSON_Delete(diff);
@@ -1163,34 +1163,12 @@ cJSON *tool_agent_cursor_status(const cJSON *params)
 	(void)params;
 	char error[256] = {0};
 	cJSON *status = owned_indicator_status(error, sizeof(error));
-	if (status) return structured_text_result(status, "indicator");
+	if (status) return mcp_structured_tool_result(status, "indicator");
 
 	cJSON *unavailable = cJSON_CreateObject();
 	cJSON_AddBoolToObject(unavailable, "available", 0);
 	cJSON_AddStringToObject(unavailable, "blocker", error);
-	return structured_text_result(unavailable, "indicator");
-}
-
-static int window_capture_still_valid(const DeskpalCapture *capture)
-{
-	WindowInfo current;
-	return x11_get_window_info(capture->window_id, &current) == 0 &&
-	       current.viewable && current.pid == capture->process_id &&
-	       strcmp(current.title, capture->title) == 0 &&
-	       strcmp(current.app_class, capture->app_class) == 0 &&
-	       current.x == capture->window_x && current.y == capture->window_y &&
-	       current.width == capture->window_width &&
-	       current.height == capture->window_height;
-}
-
-static int validate_captured_window(
-	const DeskpalCapture *base, void *data, char *error, size_t error_len)
-{
-	(void)data;
-	if (window_capture_still_valid(base)) return 0;
-	snprintf(error, error_len,
-	         "Captured X11 target was replaced or its geometry changed");
-	return -1;
+	return mcp_structured_tool_result(unavailable, "indicator");
 }
 
 static int observe_semantic_change_target(
@@ -1264,7 +1242,7 @@ cJSON *tool_wait_for_semantic_change(const cJSON *params)
 	SemanticChangeResult change = {0};
 	int rc = semantic_change_wait(
 		&base, started_ms + timeout_ms,
-		validate_captured_window, observe_semantic_change_target, NULL,
+		capture_validate_window, observe_semantic_change_target, NULL,
 		semantic_change_cancelled, NULL, &change);
 
 	cJSON *payload = cJSON_CreateObject();
@@ -1300,115 +1278,10 @@ cJSON *tool_wait_for_semantic_change(const cJSON *params)
 	cJSON_AddBoolToObject(payload, "focusChanged", 0);
 	cJSON_AddBoolToObject(payload, "stackingChanged", 0);
 	cJSON_AddBoolToObject(payload, "clipboardChanged", 0);
-	cJSON *result = structured_text_result(payload, "semanticChange");
+	cJSON *result = mcp_structured_tool_result(payload, "semanticChange");
 	if (rc < 0 || change.status == SEMANTIC_CHANGE_CANCELLED)
 		cJSON_AddBoolToObject(result, "isError", 1);
 	semantic_change_result_clear(&change);
-	return result;
-}
-
-static int capture_settle_frame(
-	const DeskpalCapture *base, void *data, ScreenshotFrame *frame,
-	char *error, size_t error_len)
-{
-	(void)data;
-	if (screenshot_capture_frame(base->window_id, frame) == 0) return 0;
-	snprintf(error, error_len, "Could not capture exact X11 window frame");
-	return -1;
-}
-
-static int frame_settle_cancelled(void *data)
-{
-	(void)data;
-	return mcp_request_cancelled();
-}
-
-static cJSON *frame_diff_json(const FrameStateDiff *diff)
-{
-	cJSON *json = cJSON_CreateObject();
-	cJSON_AddBoolToObject(json, "comparable", diff->comparable);
-	cJSON_AddBoolToObject(json, "changed", diff->changed);
-	cJSON_AddNumberToObject(json, "changedPixels",
-	                       (double)diff->changed_pixels);
-	cJSON_AddNumberToObject(json, "totalPixels", (double)diff->total_pixels);
-	cJSON_AddNumberToObject(json, "changedFraction", diff->changed_fraction);
-	cJSON_AddNumberToObject(json, "maxChannelDelta", diff->max_channel_delta);
-	if (diff->changed && diff->comparable) {
-		cJSON *bounds = cJSON_CreateObject();
-		cJSON_AddNumberToObject(bounds, "x", diff->x);
-		cJSON_AddNumberToObject(bounds, "y", diff->y);
-		cJSON_AddNumberToObject(bounds, "width", diff->width);
-		cJSON_AddNumberToObject(bounds, "height", diff->height);
-		cJSON_AddItemToObject(json, "changedBounds", bounds);
-	}
-	return json;
-}
-
-cJSON *tool_wait_for_frame_stable(const cJSON *params)
-{
-	const char *capture_id = json_str(params, "captureId", NULL);
-	int timeout_ms = json_int(params, "timeoutMs", 3000);
-	int stable_ms = json_int(params, "stableMs", 200);
-	int interval_ms = json_int(params, "intervalMs", 50);
-	int tolerance = json_int(params, "tolerance", 0);
-	DeskpalCapture base = {0};
-	int lookup = captures_lookup(capture_id, &base);
-	if (lookup == -2)
-		return mcp_tool_error_result(
-			"captureId is stale; take a fresh get_app_state observation");
-	if (lookup != 0 || base.target != DESKPAL_CAPTURE_WINDOW ||
-	    !base.frame_revision[0])
-		return mcp_tool_error_result(
-			"captureId must identify a stable get_app_state observation with source pixels");
-
-	long long started_ms = frame_settle_monotonic_ms();
-	FrameSettleResult settled = {0};
-	int rc = frame_settle_wait(
-		&base, started_ms + timeout_ms, stable_ms, interval_ms, tolerance,
-		validate_captured_window, capture_settle_frame, NULL,
-		frame_settle_cancelled, NULL, &settled);
-	cJSON *payload = cJSON_CreateObject();
-	cJSON_AddStringToObject(payload, "baseCaptureId", base.id);
-	const char *status = settled.status == FRAME_SETTLE_SETTLED ? "settled" :
-		settled.status == FRAME_SETTLE_TIMEOUT ? "timeout" :
-		settled.status == FRAME_SETTLE_CANCELLED ? "cancelled" : "error";
-	cJSON_AddStringToObject(payload, "status", status);
-	cJSON_AddBoolToObject(payload, "settled",
-	                     settled.status == FRAME_SETTLE_SETTLED);
-	cJSON_AddBoolToObject(payload, "timedOut",
-	                     settled.status == FRAME_SETTLE_TIMEOUT);
-	cJSON_AddBoolToObject(payload, "cancelled",
-	                     settled.status == FRAME_SETTLE_CANCELLED);
-	cJSON_AddNumberToObject(payload, "timeoutMs", timeout_ms);
-	cJSON_AddNumberToObject(payload, "stableMs", stable_ms);
-	cJSON_AddNumberToObject(payload, "intervalMs", interval_ms);
-	cJSON_AddNumberToObject(payload, "tolerance", tolerance);
-	cJSON_AddNumberToObject(payload, "elapsedMs",
-	                       frame_settle_monotonic_ms() - started_ms);
-	cJSON_AddNumberToObject(payload, "sampleCount", settled.sample_count);
-	cJSON_AddNumberToObject(payload, "changeCount", settled.change_count);
-	cJSON_AddNumberToObject(payload, "stableForMs", settled.stable_for_ms);
-	cJSON_AddBoolToObject(payload, "changedFromCapture",
-	                     settled.changed_from_capture);
-	cJSON_AddStringToObject(payload, "baseRevision", base.frame_revision);
-	if (settled.final_signature.revision[0])
-		cJSON_AddStringToObject(payload, "finalRevision",
-		                      settled.final_signature.revision);
-	if (settled.change_count > 0) {
-		cJSON_AddItemToObject(payload, "lastChange",
-		                     frame_diff_json(&settled.last_change));
-		cJSON_AddItemToObject(payload, "largestChange",
-		                     frame_diff_json(&settled.largest_change));
-	}
-	if (settled.error[0]) cJSON_AddStringToObject(payload, "error", settled.error);
-	cJSON_AddBoolToObject(payload, "inputDelivered", 0);
-	cJSON_AddBoolToObject(payload, "sharedPointerMoved", 0);
-	cJSON_AddBoolToObject(payload, "focusChanged", 0);
-	cJSON_AddBoolToObject(payload, "stackingChanged", 0);
-	cJSON_AddBoolToObject(payload, "clipboardChanged", 0);
-	cJSON *result = structured_text_result(payload, "frameSettle");
-	if (rc < 0 || settled.status == FRAME_SETTLE_CANCELLED)
-		cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
 
@@ -1439,7 +1312,7 @@ cJSON *tool_agent_cursor_move(const cJSON *params)
 	    image_y < 0 || image_y >= capture.image_height)
 		return mcp_tool_error_result("x/y fall outside the capture image bounds");
 	if (capture.target == DESKPAL_CAPTURE_WINDOW &&
-	    !window_capture_still_valid(&capture))
+	    !capture_window_still_valid(&capture))
 		return mcp_tool_error_result(
 			"Window capture target was replaced or its geometry changed; observe again");
 
@@ -1495,7 +1368,7 @@ cJSON *tool_agent_cursor_move(const cJSON *params)
 		cJSON_AddBoolToObject(payload, "indicatorMoved", 0);
 		cJSON_AddBoolToObject(payload, "verified", 0);
 		cJSON_AddStringToObject(payload, "error", error);
-		cJSON *result = structured_text_result(payload, "indicator");
+		cJSON *result = mcp_structured_tool_result(payload, "indicator");
 		cJSON_AddBoolToObject(result, "isError", 1);
 		return result;
 	}
@@ -1545,7 +1418,7 @@ cJSON *tool_agent_cursor_move(const cJSON *params)
 			error[0] ? error : "Indicator movement did not settle before timeout");
 	cJSON_Delete(settled_status);
 
-	cJSON *result = structured_text_result(payload, "indicator");
+	cJSON *result = mcp_structured_tool_result(payload, "indicator");
 	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
@@ -1566,7 +1439,7 @@ cJSON *tool_agent_cursor_hide(const cJSON *params)
 	cJSON_AddBoolToObject(payload, "hidden", rc == 0 && hidden);
 	cJSON_AddBoolToObject(payload, "verified", rc == 0 && !outcome_unknown);
 	if (rc != 0) cJSON_AddStringToObject(payload, "error", error);
-	cJSON *result = structured_text_result(payload, "indicator");
+	cJSON *result = mcp_structured_tool_result(payload, "indicator");
 	if (rc != 0) cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
@@ -1646,7 +1519,7 @@ static cJSON *semantic_mutation_error_result(const char *metadata_key,
 	cJSON_AddStringToObject(payload, "code", code);
 	cJSON_AddStringToObject(payload, "message", message);
 	cJSON_AddBoolToObject(payload, "retryRecommended", retry_recommended);
-	cJSON *result = structured_text_result(payload, metadata_key);
+	cJSON *result = mcp_structured_tool_result(payload, metadata_key);
 	cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
@@ -1708,7 +1581,7 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params,
 	if (lookup != 0 || capture.target != DESKPAL_CAPTURE_WINDOW)
 		return mcp_tool_error_result(
 			"captureId must come from a recent stable get_app_state observation");
-	if (!window_capture_still_valid(&capture))
+	if (!capture_window_still_valid(&capture))
 		return mcp_tool_error_result(
 			"Window capture target was replaced or its geometry changed; observe again");
 
@@ -1812,7 +1685,7 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params,
 		return mcp_tool_error_result(
 			"Indicator move returned no verified structured result");
 	}
-	if (!window_capture_still_valid(&capture)) {
+	if (!capture_window_still_valid(&capture)) {
 		int hidden = 0;
 		int mutation_issued = 0;
 		int outcome_unknown = 0;
@@ -1942,7 +1815,7 @@ static cJSON *tool_agent_semantic_mutation(const cJSON *params,
 	x11_free_stacking_snapshot(&stacking_before);
 	x11_free_stacking_snapshot(&stacking_after);
 	cJSON_Delete(semantic);
-	cJSON *result = structured_text_result(payload, result_key);
+	cJSON *result = mcp_structured_tool_result(payload, result_key);
 	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }
@@ -1984,31 +1857,31 @@ cJSON *tool_release_control(const cJSON *params)
 	cJSON_AddBoolToObject(payload, "released", 0);
 	if (!held_before) {
 		cJSON_AddStringToObject(payload, "reason", "not_held");
-		return structured_text_result(payload, "control");
+		return mcp_structured_tool_result(payload, "control");
 	}
 	if (control_is_adopted()) {
 		cJSON_AddStringToObject(payload, "reason", "isolated_child");
-		return structured_text_result(payload, "control");
+		return mcp_structured_tool_result(payload, "control");
 	}
 	int active_sessions = sessions_active_count();
 	cJSON_AddNumberToObject(payload, "activeIsolatedSessions", active_sessions);
 	if (active_sessions > 0) {
 		cJSON_AddStringToObject(payload, "reason", "isolated_sessions_active");
-		return structured_text_result(payload, "control");
+		return mcp_structured_tool_result(payload, "control");
 	}
 	if (x11_input_is_held()) {
 		cJSON_AddStringToObject(payload, "reason", "mouse_button_held");
-		return structured_text_result(payload, "control");
+		return mcp_structured_tool_result(payload, "control");
 	}
 	char error[256] = {0};
 	if (control_release(error, sizeof(error)) != 0) {
 		cJSON_AddStringToObject(payload, "reason", "release_failed");
 		cJSON_AddStringToObject(payload, "error", error);
-		return structured_text_result(payload, "control");
+		return mcp_structured_tool_result(payload, "control");
 	}
 	cJSON_ReplaceItemInObject(payload, "released", cJSON_CreateBool(1));
 	cJSON_AddStringToObject(payload, "reason", "released");
-	return structured_text_result(payload, "control");
+	return mcp_structured_tool_result(payload, "control");
 }
 
 /* ── environment status ──────────────────────────────────────────────────── */
@@ -2205,7 +2078,7 @@ cJSON *tool_get_environment_status(const cJSON *params)
 			"Prefer app APIs and verified AT-SPI actions; use launch_isolated_app for disposable GUI work until a compositor broker is available.");
 	cJSON_AddItemToObject(payload, "setupActions", setup);
 
-	return structured_text_result(payload, "environment");
+	return mcp_structured_tool_result(payload, "environment");
 }
 
 /* ── list_windows ────────────────────────────────────────────────────────── */
@@ -4198,6 +4071,29 @@ void tools_register_all(void)
 		"  \"required\": [\"captureId\"]"
 		"}",
 		tool_wait_for_frame_stable);
+
+	mcp_register_tool("verify_frame_change",
+		"Verify an explicit source-pixel region changed from a retained get_app_state capture after the exact window settles. Uses a bounded box-average projection, reports inside/outside change separately, never attributes the change to a particular action, and never delivers input.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"region\": {\"type\": \"object\", \"properties\": {"
+		"      \"x\": {\"type\": \"integer\", \"minimum\": 0},"
+		"      \"y\": {\"type\": \"integer\", \"minimum\": 0},"
+		"      \"width\": {\"type\": \"integer\", \"minimum\": 1},"
+		"      \"height\": {\"type\": \"integer\", \"minimum\": 1}"
+		"    }, \"required\": [\"x\", \"y\", \"width\", \"height\"]},"
+		"    \"minChangedFraction\": {\"type\": \"number\", \"minimum\": 0.000001, \"maximum\": 1, \"default\": 0.001},"
+		"    \"maxOutsideChangedFraction\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 1, \"default\": 1},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 3000},"
+		"    \"stableMs\": {\"type\": \"integer\", \"minimum\": 20, \"maximum\": 2000, \"default\": 200},"
+		"    \"intervalMs\": {\"type\": \"integer\", \"minimum\": 10, \"maximum\": 500, \"default\": 50},"
+		"    \"tolerance\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 255, \"default\": 0}"
+		"  },"
+		"  \"required\": [\"captureId\", \"region\"]"
+		"}",
+		tool_verify_frame_change);
 
 	mcp_register_tool("agent_cursor_status",
 		"Report GNOME logical-cursor availability, stage and monitor geometry, and only the cursors owned by this Deskpal process. Indicator state is visual metadata, not proof of delivered input.",
