@@ -215,10 +215,14 @@ broker actions will drive.
       safe surface identity, capability negotiation, frame/action binding,
       cancellation/outcome states, limits, errors, and verification evidence;
       see [`broker-protocol.md`](broker-protocol.md).
-- [ ] Prove whether stock GNOME/Mutter exposes a compositor-enforced primitive
-      for exact covered-surface input without pointer, focus, stacking, or
-      workspace changes. Keep the indicator extension input-free and report
-      `backgroundUnavailable` if no supported primitive exists.
+- [x] Audit installed Mutter 42.9 and upstream main for an exact covered-surface
+      input primitive. Window streams map coordinates, but RemoteDesktop/libei
+      still use virtual devices and global scene picking; stock GNOME must report
+      `backgroundUnavailable`. See
+      [`gnome-broker-feasibility.md`](gnome-broker-feasibility.md).
+- [ ] Design and test a minimal reviewed Mutter change for an authorized agent
+      pointer context and direct surface-local click in a nested compositor; stop
+      if Wayland/Xwayland protocol semantics or non-interference cannot be kept.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or

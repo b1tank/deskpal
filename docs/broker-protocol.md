@@ -288,10 +288,13 @@ compositor-enforced primitive that can:
 3. leave pointer, focus, stacking, and workspace unchanged; and
 4. expose completion/cancellation evidence.
 
-If stock Mutter exposes no such supported primitive, the honest options are a
-reviewed Mutter patch/plugin or `backgroundUnavailable`. A larger Shell
-extension, synthetic global events, temporary raising, focus restoration, or
-window hiding does not satisfy this contract.
+The source audit in
+[`gnome-broker-feasibility.md`](gnome-broker-feasibility.md) found no such stock
+primitive in installed Mutter 42.9 or audited upstream main. Stock GNOME must
+therefore report `backgroundUnavailable`; the remaining honest implementation
+option is a reviewed Mutter patch/plugin. A larger Shell extension, synthetic
+global events, temporary raising, focus restoration, or window hiding does not
+satisfy this contract.
 
 ## Acceptance gates
 
