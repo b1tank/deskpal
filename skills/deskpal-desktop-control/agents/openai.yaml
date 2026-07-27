@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deskpal Desktop Control"
+  short_description: "Safely inspect and control Linux desktop apps"
+  default_prompt: "Use $deskpal-desktop-control to inspect and interact with this desktop application safely."
