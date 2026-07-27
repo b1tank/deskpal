@@ -220,6 +220,9 @@ broker actions will drive.
       still use virtual devices and global scene picking; stock GNOME must report
       `backgroundUnavailable`. See
       [`gnome-broker-feasibility.md`](gnome-broker-feasibility.md).
+- [x] Add backend-neutral broker surface identity, capability, stable error,
+      and operation-state foundations with fail-closed transition tests; no
+      compositor mutation or advertised background capability.
 - [ ] Design and test a minimal privately maintained Mutter change for an
       authorized agent pointer context and direct surface-local click in a nested
       compositor; stop if Wayland/Xwayland protocol semantics or non-interference

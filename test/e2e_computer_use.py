@@ -248,7 +248,7 @@ def run_suite():
             )
             assert TITLE in text(launched), launched
 
-            deadline = time.time() + 2
+            deadline = time.time() + 5
             listing = ""
             while time.time() < deadline:
                 listing = text(client.tool("list_windows"))

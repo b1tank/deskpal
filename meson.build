@@ -67,6 +67,11 @@ frame_observation = static_library('frame-observation',
   dependencies : core_deps,
   c_args : c_args)
 
+broker_contract = static_library('broker-contract',
+  files('csrc/broker_contract.c'),
+  include_directories : [vendor_inc, include_directories('csrc')],
+  c_args : c_args)
+
 semantic_observation = static_library('semantic-observation',
   files('csrc/accessibility.c', 'csrc/semantic_state.c',
         'csrc/semantic_events.c', 'csrc/semantic_change.c'), vendor_src,
@@ -76,12 +81,19 @@ semantic_observation = static_library('semantic-observation',
 
 executable('deskpal',
   core_src,
-  link_with : [frame_observation, semantic_observation],
+  link_with : [frame_observation, semantic_observation, broker_contract],
   include_directories : [vendor_inc, include_directories('csrc')],
   dependencies : core_deps,
   c_args : c_args,
   link_args : link_args + ['-ldl'],  # for dlopen
   install : true)
+
+executable('broker-contract-test',
+  files('test/broker_contract_test.c'),
+  link_with : broker_contract,
+  include_directories : [vendor_inc, include_directories('csrc')],
+  c_args : c_args,
+  install : false)
 
 executable('frame-state-test',
   files('test/frame_state_test.c'),

@@ -328,8 +328,15 @@ the route is advertised. A live manual demo alone is not acceptance.
 
 ## Staged implementation
 
-1. Implement backend-neutral C identity, capability, grant, operation, and error
-   types with parser/state-machine tests; no compositor mutation.
+The first backend-neutral foundation is implemented in `csrc/broker_contract.*`:
+opaque instance/surface generations, capability checks, stable error names, and
+fail-closed operation transitions. It advertises no compositor capability and
+performs no mutation. Grants, parsing, backend transport, and compositor work
+remain separate milestones.
+
+1. Extend the foundation with grant ownership and bounded wire parsing only when
+   a private compositor transport exists; do not invent an unauthenticated local
+   broker protocol first.
 2. Create the Mutter work only in a private local clone outside the public
    Deskpal repository. Use a local prefix/container and nested compositor; never
    modify the active host compositor or prepare an upstream submission.

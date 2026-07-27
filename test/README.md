@@ -20,6 +20,9 @@ The suites are:
 
 - `test:extension`: Node syntax-check of the Pi bridge, including graceful MCP
   cancellation and its bounded process-termination fallback.
+- `broker_contract.py`: build-matched fail-closed coverage for opaque surface
+  identity, capabilities, stable errors, replay/idempotency, and operation-state
+  transitions without compositor mutation.
 - `frame_state.py`: build-matched deterministic coverage for normalized visual
   revisions, bounded box-average projection, regional inside/outside differences,
   tolerance, changed bounds/counts, non-comparable dimensions, anchor-based
