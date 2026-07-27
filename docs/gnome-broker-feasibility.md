@@ -8,8 +8,9 @@ pointer, focus, stacking, and workspace.
 
 Deskpal must therefore report `backgroundUnavailable` for stock-GNOME pixel
 input. The existing GNOME Shell indicator must remain input-free. The next input
-feasibility route is a narrowly reviewed Mutter change/plugin implementing the
-broker contract, not a larger Shell extension or portal/virtual-pointer wrapper.
+feasibility route is a narrowly reviewed, privately maintained local Mutter
+change/plugin implementing the broker contract, not a larger Shell extension or
+portal/virtual-pointer wrapper. It must never be submitted or pushed upstream.
 
 This conclusion does not block semantic actions, private Xvfb sessions, or the
 explicit shared-seat `foregroundAllowed` compatibility route.
@@ -169,13 +170,16 @@ grab, and a dedicated nested compositor. Unsupported states must return
    input backend.
 2. Build the read-only ScreenCast window-stream spike separately; do not confuse
    capture success with input feasibility.
-3. Create a minimal Mutter patch design for an independent agent pointer context
-   and direct authorized-surface click.
-4. Run it only in a nested Mutter test session with two fixture clients: A
+3. Create the minimal Mutter change in a private local clone outside Deskpal.
+   Build/install only to an isolated prefix or container; do not vendor the patch
+   here, alter the active host compositor, or prepare any upstream submission.
+4. Design an independent agent pointer context and direct authorized-surface
+   click in that private clone.
+5. Run it only in a nested Mutter test session with two fixture clients: A
    covered, B focused and receiving human input.
-5. Require the complete covered-window acceptance gate from
+6. Require the complete covered-window acceptance gate from
    [`broker-protocol.md`](broker-protocol.md) before exposing any host tool.
-6. If the patch cannot preserve client protocol semantics and all stated side
+7. If the patch cannot preserve client protocol semantics and all stated side
    effects, stop and retain `backgroundUnavailable` rather than adding a
    compatibility workaround.
 

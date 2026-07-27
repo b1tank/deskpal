@@ -61,6 +61,19 @@ the right boundary. Do not schedule broad cleanup merely for aesthetics: every
 restructure needs a concrete ownership, duplication, coupling, drift, safety, or
 testability reason and must remain independently verifiable.
 
+## Private Mutter development boundary
+
+- Never open, prepare, or suggest an upstream/public Mutter issue, merge request,
+  pull request, patch submission, or automated push.
+- Mutter experiments live only in a private local clone/fork outside this public
+  Deskpal worktree. Do not vendor that source or commit its patch series here.
+- Build and install experimental Mutter artifacts only into a local isolated
+  prefix, container, or nested-compositor environment. Never replace the host
+  compositor or modify the active GNOME session.
+- Deskpal may contain backend-neutral contracts, mocks, capability reporting,
+  and tests. Connecting private Mutter code to a public repository requires new
+  explicit user approval; the default is private and local forever.
+
 ## Invariants
 
 - Unscoped tools target the visible desktop; `sessionId` tools stay inside that

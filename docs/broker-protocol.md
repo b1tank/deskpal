@@ -292,7 +292,9 @@ The source audit in
 [`gnome-broker-feasibility.md`](gnome-broker-feasibility.md) found no such stock
 primitive in installed Mutter 42.9 or audited upstream main. Stock GNOME must
 therefore report `backgroundUnavailable`; the remaining honest implementation
-option is a reviewed Mutter patch/plugin. A larger Shell extension, synthetic
+option is a reviewed, privately maintained local Mutter patch/plugin. It must
+never be submitted or pushed upstream/publicly and must be built and installed
+only in an isolated local environment. A larger Shell extension, synthetic
 global events, temporary raising, focus restoration, or window hiding does not
 satisfy this contract.
 
@@ -328,12 +330,15 @@ the route is advertised. A live manual demo alone is not acceptance.
 
 1. Implement backend-neutral C identity, capability, grant, operation, and error
    types with parser/state-machine tests; no compositor mutation.
-2. Build a read-only GNOME spike for exact authorized surface identity and
+2. Create the Mutter work only in a private local clone outside the public
+   Deskpal repository. Use a local prefix/container and nested compositor; never
+   modify the active host compositor or prepare an upstream submission.
+3. Build a read-only GNOME spike for exact authorized surface identity and
    persistent covered-surface capture.
-3. Resolve the GNOME direct-delivery feasibility gate. Record
+4. Resolve the GNOME direct-delivery feasibility gate. Record
    `backgroundUnavailable` if no supported primitive exists.
-4. Only after the primitive is proven, implement one capture-bound covered click
+5. Only after the primitive is proven, implement one capture-bound covered click
    with cancellation and the evidence contract above.
-5. Reuse Deskpal's existing frame settling and explicit regional verification.
-6. Harden grants, lock/revocation, protected surfaces, rate limits, crash
+6. Reuse Deskpal's existing frame settling and explicit regional verification.
+7. Harden grants, lock/revocation, protected surfaces, rate limits, crash
    cleanup, and confused-deputy cases before broader input capabilities.

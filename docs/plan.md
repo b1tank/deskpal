@@ -220,9 +220,11 @@ broker actions will drive.
       still use virtual devices and global scene picking; stock GNOME must report
       `backgroundUnavailable`. See
       [`gnome-broker-feasibility.md`](gnome-broker-feasibility.md).
-- [ ] Design and test a minimal reviewed Mutter change for an authorized agent
-      pointer context and direct surface-local click in a nested compositor; stop
-      if Wayland/Xwayland protocol semantics or non-interference cannot be kept.
+- [ ] Design and test a minimal privately maintained Mutter change for an
+      authorized agent pointer context and direct surface-local click in a nested
+      compositor; stop if Wayland/Xwayland protocol semantics or non-interference
+      cannot be kept. Never submit or push this work upstream/publicly, never
+      vendor it into Deskpal, and install it only to an isolated local prefix.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or
