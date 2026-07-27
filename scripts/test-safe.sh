@@ -6,7 +6,6 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 run_suites() {
     cd "$ROOT"
     python3 test/indicator_contract.py
-    python3 test/codex_release_hook.py
     python3 test/e2e_isolation.py
     python3 test/e2e_computer_use.py
     python3 test/e2e_accessibility.py

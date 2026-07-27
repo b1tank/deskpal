@@ -107,10 +107,6 @@ broker actions will drive.
       shared-seat risks, and concrete setup actions.
 - [x] Release Pi's visible-desktop control lease when an agent run settles;
       refuse release while isolated sessions or held mouse input depend on it.
-  - [x] Ship a Codex Stop-hook helper that requests `release_control` only when
-        that Codex process's own Deskpal child holds the kernel lock.
-  - [ ] Install, trust, and verify the optional hook at a safe Codex session
-        boundary; do not interrupt the currently active Codex run.
 - [x] Add unified [`get_app_state`](app-state.md): image, compact semantic state,
       focus, app/surface identity, scale transform, and capture ID.
 - [ ] Expand verified semantic press, selection, value, text-range, scroll,

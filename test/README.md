@@ -18,8 +18,6 @@ unchanged. Bubblewrap (`bwrap`) is therefore a safe-test dependency.
 
 The suites are:
 
-- `codex_release_hook.py`: kernel-lock ownership detection, other-client
-  isolation, free/stale-lock handling, and Stop-hook loop prevention.
 - `indicator_contract.py`: static GNOME extension syntax, narrow D-Bus surface,
   caller ownership hooks, click-through behavior, and absence of input APIs.
 - `e2e_isolation.py`: parent/child routing, Xvfb lifecycle, cleanup, malformed
