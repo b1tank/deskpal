@@ -111,7 +111,11 @@ change, timeout, or cancellation. Captures with `frameRevisionAvailable: true`
 can be passed to `wait_for_frame_stable` for bounded, cancellable source-pixel
 settling under exact identity and geometry revalidation, or to
 `verify_frame_change` with an explicit source-pixel region. The latter verifies
-a visual postcondition but does not attribute it to a particular action.
+a visual postcondition but does not attribute it to a particular action. A fresh,
+fresh capture can also be used by `click_and_verify_frame_change`, which
+preflights the retained visual baseline under an explicit noise threshold and
+binds one approved X11 click to the same regional postcondition and settling
+contract.
 
 The first implementation supports one monitor covering the full GNOME stage.
 Other layouts return a structured unsupported result until per-monitor capture

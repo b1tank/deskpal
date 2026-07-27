@@ -15,6 +15,7 @@
 #include "captures.h"
 #include "capture_target.h"
 #include "frame_tools.h"
+#include "pixel_action.h"
 #include "semantic_state.h"
 #include "semantic_change.h"
 #include "indicator.h"
@@ -1955,6 +1956,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                      indicator_available ? "gnome-shell-dbus" : "unavailable");
 	cJSON_AddStringToObject(backends, "frameSettling",
 	                      frame_settle_available ? "x11-frame-sampling" : "unavailable");
+	cJSON_AddStringToObject(backends, "verifiedPixelClick",
+	                      headless ? "x11-private-session" : "shared-seat-x11");
 	cJSON_AddStringToObject(backends, "semanticChangeWait",
 	                      semantic_wait_available ? "atspi-events" : "unavailable");
 	cJSON_AddStringToObject(backends, "semanticPress",
@@ -1994,6 +1997,10 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                     environment_capability(frame_settle_available,
 	                         frame_settle_available ? "x11-frame-sampling" : "unavailable",
 	                         0, 1));
+	cJSON_AddItemToObject(capabilities, "verifiedPixelClick",
+	                     environment_capability(1,
+	                         headless ? "x11-private-session" : "shared-seat-x11",
+	                         !headless, headless));
 	cJSON_AddItemToObject(capabilities, "semanticChangeWait",
 	                     environment_capability(semantic_wait_available,
 	                         semantic_wait_available ? "atspi-events" : "unavailable",
@@ -2258,55 +2265,12 @@ cJSON *tool_click(const cJSON *params)
 	if (x11_get_window_info(target, &info) != 0) {
 		return mcp_text_result("Could not get window position");
 	}
-	if (getenv("DESKPAL_HEADLESS_ACTIVE"))
-		x11_focus_window(target);
-
 	int abs_x = info.x + x;
 	int abs_y = info.y + y;
-
-	if (x11_is_wayland()) {
-		/* On Wayland we cannot trust info.x/info.y from
-		 * xdo_get_window_location to match the renderer's content
-		 * origin (observed ~90 screen-px offset on mutter+HiDPI).
-		 * Route the whole motion+press through xdotool --window,
-		 * which uses the X server's coordinate system. */
-		if (x11_window_mouse_move(target, x, y) != 0) {
-			return mcp_text_result("Mouse move failed");
-		}
-		usleep_ms(10);
-		if (!window_is_viewable(target))
-			return mcp_text_result("Window not found");
-		if (x11_click(button, dbl ? 2 : 1) != 0)
-			return mcp_text_result("Click failed");
-	} else {
-		/* Move cursor to click position — with uinput this also
-		 * gives the window compositor-level focus automatically. */
-		x11_mouse_move(abs_x, abs_y);
-		usleep_ms(10);
-		if (!window_is_viewable(target))
-			return mcp_text_result("Window not found");
-
-		if (button != 1 && uinput_available()) {
-			/* uinput ABS right-click doesn't trigger GTK context
-			 * menus; xdotool does. Keep this path for parity. */
-			char cmd[128];
-			snprintf(cmd, sizeof(cmd),
-				"xdotool mousemove --window %lu %d %d && xdotool click %d",
-				target, x, y, button);
-			if (dbl) {
-				char cmd2[280];
-				snprintf(cmd2, sizeof(cmd2), "%s && %s", cmd, cmd);
-					if (system(cmd2) != 0)
-						return mcp_text_result("Click failed");
-			} else {
-					if (system(cmd) != 0)
-						return mcp_text_result("Click failed");
-			}
-		} else {
-				if (x11_click(button, dbl ? 2 : 1) != 0)
-					return mcp_text_result("Click failed");
-		}
-	}
+	char click_error[128] = {0};
+	if (pixel_click_window(target, x, y, button, dbl ? 2 : 1,
+	                       click_error, sizeof(click_error)) != 0)
+		return mcp_text_result(click_error);
 
 	char buf[128];
 	snprintf(buf, sizeof(buf),
@@ -4094,6 +4058,34 @@ void tools_register_all(void)
 		"  \"required\": [\"captureId\", \"region\"]"
 		"}",
 		tool_verify_frame_change);
+
+	mcp_register_tool("click_and_verify_frame_change",
+		"Deliver one capture-bound X11 click and verify an explicit visual region after the exact window settles. Visible-desktop use requires foregroundAllowed=true and truthfully moves the shared pointer; isolated-session delivery stays private. Returns route and measured side effects.",
+		"{"
+		"  \"type\": \"object\","
+		"  \"properties\": {"
+		"    \"captureId\": {\"type\": \"string\", \"minLength\": 1, \"maxLength\": 63},"
+		"    \"x\": {\"type\": \"integer\", \"minimum\": 0},"
+		"    \"y\": {\"type\": \"integer\", \"minimum\": 0},"
+		"    \"button\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 3, \"default\": 1},"
+		"    \"foregroundAllowed\": {\"type\": \"boolean\"},"
+		"    \"region\": {\"type\": \"object\", \"properties\": {"
+		"      \"x\": {\"type\": \"integer\", \"minimum\": 0},"
+		"      \"y\": {\"type\": \"integer\", \"minimum\": 0},"
+		"      \"width\": {\"type\": \"integer\", \"minimum\": 1},"
+		"      \"height\": {\"type\": \"integer\", \"minimum\": 1}"
+		"    }, \"required\": [\"x\", \"y\", \"width\", \"height\"]},"
+		"    \"minChangedFraction\": {\"type\": \"number\", \"minimum\": 0.000001, \"maximum\": 1, \"default\": 0.001},"
+		"    \"maxPreActionChangedFraction\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 1, \"default\": 0.0001},"
+		"    \"maxOutsideChangedFraction\": {\"type\": \"number\", \"minimum\": 0, \"maximum\": 1, \"default\": 1},"
+		"    \"timeoutMs\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5000, \"default\": 3000},"
+		"    \"stableMs\": {\"type\": \"integer\", \"minimum\": 20, \"maximum\": 2000, \"default\": 200},"
+		"    \"intervalMs\": {\"type\": \"integer\", \"minimum\": 10, \"maximum\": 500, \"default\": 50},"
+		"    \"tolerance\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 255, \"default\": 0}"
+		"  },"
+		"  \"required\": [\"captureId\", \"x\", \"y\", \"foregroundAllowed\", \"region\"]"
+		"}",
+		tool_click_and_verify_frame_change);
 
 	mcp_register_tool("agent_cursor_status",
 		"Report GNOME logical-cursor availability, stage and monitor geometry, and only the cursors owned by this Deskpal process. Indicator state is visual metadata, not proof of delivered input.",

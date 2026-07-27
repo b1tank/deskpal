@@ -37,7 +37,8 @@ int control_tool_requires_lock(const char *tool_name)
 		"agent_cursor_move", "agent_cursor_hide",
 		"agent_semantic_press", "agent_semantic_set_text",
 		"agent_semantic_set_value", "agent_semantic_select",
-		"agent_semantic_replace_text_range", "exec", NULL
+		"agent_semantic_replace_text_range", "click_and_verify_frame_change",
+		"exec", NULL
 	};
 
 	for (int i = 0; mutating_tools[i]; i++) {

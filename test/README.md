@@ -32,7 +32,8 @@ The suites are:
   capability/blocker reporting, transport cancellation with queued-request
   preservation and disconnect exit, exact capture-bound app-state observations,
   privacy-safe semantic and visual revisions/diffs, cancellable frame settling,
-  explicit regional visual postconditions, stale-geometry refusal, screenshot
+  explicit regional visual postconditions, bound foreground click verification,
+  stale-geometry and stale-frame refusal, screenshot
   scaling metadata,
   screenshot/OCR/click/type/key/hover/resize/scroll/clipboard,
   controller lock contention, held-input/session release guards, persistent

@@ -98,6 +98,9 @@ def run_suite():
             frame_verify_schema = tool_by_name(
                 tools, "verify_frame_change"
             )["inputSchema"]
+            atomic_click_schema = tool_by_name(
+                tools, "click_and_verify_frame_change"
+            )["inputSchema"]
             tool_by_name(tools, "agent_cursor_status")
             tool_by_name(tools, "agent_cursor_hide")
             release_schema = tool_by_name(tools, "release_control")["inputSchema"]
@@ -114,10 +117,14 @@ def run_suite():
             assert app_state_schema["properties"]["includeText"]["default"] is False
             assert frame_settle_schema["required"] == ["captureId"]
             assert frame_settle_schema["properties"]["stableMs"]["default"] == 200
-            assert "sessionId" not in frame_settle_schema["properties"]
+            assert "sessionId" in frame_settle_schema["properties"]
             assert frame_verify_schema["required"] == ["captureId", "region"]
             assert frame_verify_schema["properties"]["minChangedFraction"]["default"] == 0.001
-            assert "sessionId" not in frame_verify_schema["properties"]
+            assert "sessionId" in frame_verify_schema["properties"]
+            assert set(atomic_click_schema["required"]) == {
+                "captureId", "x", "y", "foregroundAllowed", "region"
+            }
+            assert "sessionId" in atomic_click_schema["properties"]
 
             cancel_started = time.monotonic()
             cancelled_id = client.send_request(
@@ -179,6 +186,12 @@ def run_suite():
                 "nonInterfering": False,
             }, environment
             assert environment["capabilities"]["frameSettling"]["available"] is True
+            assert environment["capabilities"]["verifiedPixelClick"] == {
+                "available": True,
+                "backend": "shared-seat-x11",
+                "sharedSeat": True,
+                "nonInterfering": False,
+            }, environment
             assert environment["capabilities"]["semanticChangeWait"]["available"] is False
             assert environment["capabilities"]["semanticPress"]["available"] is False
             assert environment["capabilities"]["semanticSetText"]["available"] is False
@@ -576,6 +589,78 @@ def run_suite():
             updated = text(client.tool("read_screen_text", {"windowName": TITLE}))
             assert "typed by deskpal" in updated, updated
 
+            client.tool("click", {"windowName": TITLE, "x": 360, "y": 100})
+            client.tool("key_press", {"windowName": TITLE, "keys": "ctrl+a"})
+            client.tool(
+                "type_text",
+                {"windowName": TITLE, "text": "atomic visual", "delay": 2},
+            )
+            atomic_base = client.tool(
+                "get_app_state", {"windowName": TITLE}
+            )["appState"]
+            blocked_atomic = client.tool(
+                "click_and_verify_frame_change",
+                {
+                    "captureId": atomic_base["captureId"],
+                    "x": 360,
+                    "y": 190,
+                    "foregroundAllowed": False,
+                    "region": {"x": 80, "y": 110, "width": 560, "height": 130},
+                },
+            )
+            assert blocked_atomic.get("isError") is True, blocked_atomic
+            assert "foregroundAllowed" in text(blocked_atomic), blocked_atomic
+            atomic_result = client.tool(
+                "click_and_verify_frame_change",
+                {
+                    "captureId": atomic_base["captureId"],
+                    "x": 360,
+                    "y": 190,
+                    "button": 1,
+                    "foregroundAllowed": True,
+                    "region": {"x": 80, "y": 110, "width": 560, "height": 130},
+                    "minChangedFraction": 0.005,
+                    "maxPreActionChangedFraction": 0.002,
+                    "timeoutMs": 1500,
+                    "stableMs": 100,
+                    "intervalMs": 20,
+                },
+            )
+            atomic = atomic_result["pixelActionVerification"]
+            assert atomic_result.get("isError") is not True, atomic
+            assert atomic["verified"] is True, atomic
+            assert atomic["actionIssued"] is True, atomic
+            assert atomic["actionAttributed"] is True, atomic
+            assert atomic["verificationBoundToAction"] is True, atomic
+            assert atomic["deliveryRoute"] == "shared-seat-x11", atomic
+            assert atomic["sharedPointerMoved"] is True, atomic
+            assert atomic["inputDelivered"] is True, atomic
+            atomic_updated = text(
+                client.tool("read_screen_text", {"windowName": TITLE})
+            )
+            assert "atomic visual" in atomic_updated, atomic_updated
+
+            stale_action_base = client.tool(
+                "get_app_state", {"windowName": TITLE}
+            )["appState"]
+            client.tool("click", {"windowName": TITLE, "x": 360, "y": 100})
+            client.tool(
+                "type_text",
+                {"windowName": TITLE, "text": " stale", "delay": 1},
+            )
+            stale_action = client.tool(
+                "click_and_verify_frame_change",
+                {
+                    "captureId": stale_action_base["captureId"],
+                    "x": 360,
+                    "y": 190,
+                    "foregroundAllowed": True,
+                    "region": {"x": 80, "y": 110, "width": 560, "height": 130},
+                },
+            )
+            assert stale_action.get("isError") is True, stale_action
+            assert "pre-action threshold" in text(stale_action), stale_action
+
             hovered = text(
                 client.tool(
                     "hover_text",
@@ -652,6 +737,56 @@ def run_suite():
                 },
             )
             assert "Clicked" in text(private_click), private_click
+            private_launch = client.tool(
+                "launch_app",
+                {
+                    "command": sys.executable,
+                    "args": [FIXTURE],
+                    "waitForWindow": TITLE,
+                    "killExisting": False,
+                    "timeout": 5,
+                    "sessionId": isolated_id,
+                },
+            )
+            assert TITLE in text(private_launch), private_launch
+            client.tool(
+                "click",
+                {"windowName": TITLE, "x": 360, "y": 100, "sessionId": isolated_id},
+            )
+            client.tool(
+                "type_text",
+                {
+                    "windowName": TITLE,
+                    "text": "private atomic",
+                    "delay": 1,
+                    "sessionId": isolated_id,
+                },
+            )
+            private_base = client.tool(
+                "get_app_state", {"windowName": TITLE, "sessionId": isolated_id}
+            )["appState"]
+            private_atomic_result = client.tool(
+                "click_and_verify_frame_change",
+                {
+                    "captureId": private_base["captureId"],
+                    "x": 360,
+                    "y": 190,
+                    "foregroundAllowed": False,
+                    "region": {"x": 80, "y": 50, "width": 560, "height": 220},
+                    "minChangedFraction": 0.005,
+                    "maxPreActionChangedFraction": 0.002,
+                    "timeoutMs": 1500,
+                    "stableMs": 100,
+                    "intervalMs": 20,
+                    "sessionId": isolated_id,
+                },
+            )
+            assert "pixelActionVerification" in private_atomic_result, private_atomic_result
+            private_atomic = private_atomic_result["pixelActionVerification"]
+            assert private_atomic["verified"] is True, private_atomic
+            assert private_atomic["deliveryRoute"] == "x11-private-session"
+            assert private_atomic["sharedPointerMoved"] is False
+            assert private_atomic["inputDelivered"] is True
 
             contender_env = env.copy()
             contender_env["XDG_RUNTIME_DIR"] = os.path.join(temp_dir, "other-runtime")

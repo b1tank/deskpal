@@ -177,9 +177,12 @@ broker actions will drive.
   - [x] Ship `verify_frame_change` for explicit source-region postconditions
         against bounded retained projections, with inside/outside thresholds and
         truthful `actionAttributed: false` reporting.
-  - [ ] Bind before/after stable frames, one approved delivery route, and an
-        explicit visual postcondition into a single operation before claiming
-        that a pixel action caused the verified change.
+  - [x] Bind one capture-preflighted X11 click and explicit regional visual
+        postcondition into `click_and_verify_frame_change`, requiring visible-
+        desktop `foregroundAllowed`, measuring side effects, and distinguishing
+        shared-seat from private-session delivery.
+  - [ ] Repeat the same bound verification contract over a trusted background
+        compositor route before claiming non-interfering pixel-action control.
   - [ ] Prove bounded temporary AT-SPI listener registration, GLib dispatch,
         cancellation, exact-target filtering, and cleanup before exposing a
         semantic-change wait tool; use revision polling only if the listener

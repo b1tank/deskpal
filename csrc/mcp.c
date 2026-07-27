@@ -56,8 +56,6 @@ void mcp_register_tool(const char *name, const char *description,
 	    strcmp(name, "get_focused_element") != 0 &&
 	    strcmp(name, "accessibility_action") != 0 &&
 	    strcmp(name, "wait_for_semantic_change") != 0 &&
-	    strcmp(name, "wait_for_frame_stable") != 0 &&
-	    strcmp(name, "verify_frame_change") != 0 &&
 	    strcmp(name, "agent_semantic_press") != 0 &&
 	    strcmp(name, "agent_semantic_set_text") != 0 &&
 	    strcmp(name, "agent_semantic_set_value") != 0 &&
@@ -398,7 +396,8 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 	    (!integer_in_range(arguments, "maxWidth", 0, 8192) ||
 	     !integer_in_range(arguments, "maxHeight", 0, 8192)))
 		return mcp_tool_error_result("maxWidth/maxHeight must be integers between 0 and 8192");
-	if (strcmp(tool_name, "verify_frame_change") == 0) {
+	if (strcmp(tool_name, "verify_frame_change") == 0 ||
+	    strcmp(tool_name, "click_and_verify_frame_change") == 0) {
 		const cJSON *region = arguments
 			? cJSON_GetObjectItem(arguments, "region") : NULL;
 		if (!bounded_string_if_present(arguments, "captureId", 63) ||
@@ -425,6 +424,28 @@ static cJSON *validate_tool_arguments(const char *tool_name,
 		if ((stable ? stable->valueint : 200) >
 		    (timeout ? timeout->valueint : 3000))
 			return mcp_tool_error_result("stableMs cannot exceed timeoutMs");
+		if (strcmp(tool_name, "click_and_verify_frame_change") == 0 &&
+		    (!integer_in_range(arguments, "x", 0, 32768) ||
+		     !number_in_range(arguments, "maxPreActionChangedFraction", 0.0, 1.0) ||
+		     !integer_in_range(arguments, "y", 0, 32768) ||
+		     !integer_in_range(arguments, "button", 1, 3) ||
+		     !cJSON_GetObjectItem(arguments, "x") ||
+		     !cJSON_GetObjectItem(arguments, "y") ||
+		     !cJSON_GetObjectItem(arguments, "foregroundAllowed") ||
+		     !cJSON_IsBool(cJSON_GetObjectItem(arguments, "foregroundAllowed"))))
+			return mcp_tool_error_result(
+				"click_and_verify_frame_change requires image x/y, foregroundAllowed, bounded pre-action change, and an optional button from 1 to 3");
+		if (strcmp(tool_name, "click_and_verify_frame_change") == 0) {
+			const cJSON *minimum = cJSON_GetObjectItem(
+				arguments, "minChangedFraction");
+			const cJSON *pre_action = cJSON_GetObjectItem(
+				arguments, "maxPreActionChangedFraction");
+			double minimum_value = minimum ? minimum->valuedouble : 0.001;
+			double pre_action_value = pre_action ? pre_action->valuedouble : 0.0001;
+			if (pre_action_value >= minimum_value)
+				return mcp_tool_error_result(
+					"maxPreActionChangedFraction must be less than minChangedFraction");
+		}
 	}
 	if (strcmp(tool_name, "wait_for_frame_stable") == 0) {
 		if (!bounded_string_if_present(arguments, "captureId", 63) ||
@@ -796,8 +817,6 @@ static cJSON *handle_tools_call(const cJSON *params)
 		strcmp(tool_name, "get_focused_element") != 0 &&
 		strcmp(tool_name, "accessibility_action") != 0 &&
 		strcmp(tool_name, "wait_for_semantic_change") != 0 &&
-		strcmp(tool_name, "wait_for_frame_stable") != 0 &&
-		strcmp(tool_name, "verify_frame_change") != 0 &&
 		strcmp(tool_name, "agent_semantic_press") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_text") != 0 &&
 		strcmp(tool_name, "agent_semantic_set_value") != 0 &&
@@ -812,8 +831,6 @@ static cJSON *handle_tools_call(const cJSON *params)
 	     strcmp(tool_name, "get_focused_element") == 0 ||
 	     strcmp(tool_name, "accessibility_action") == 0 ||
 	     strcmp(tool_name, "wait_for_semantic_change") == 0 ||
-	     strcmp(tool_name, "wait_for_frame_stable") == 0 ||
-	     strcmp(tool_name, "verify_frame_change") == 0 ||
 	     strcmp(tool_name, "agent_semantic_press") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_text") == 0 ||
 	     strcmp(tool_name, "agent_semantic_set_value") == 0 ||

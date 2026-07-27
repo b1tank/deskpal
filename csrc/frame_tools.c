@@ -6,10 +6,14 @@
 #include "frame_settle.h"
 #include "frame_state.h"
 #include "mcp.h"
+#include "pixel_action.h"
 #include "screenshot.h"
+#include "x11.h"
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static const char *json_str(const cJSON *obj, const char *key, const char *def)
 {
@@ -43,6 +47,22 @@ static int frame_settle_cancelled(void *data)
 {
 	(void)data;
 	return mcp_request_cancelled();
+}
+
+static void set_bool(cJSON *object, const char *key, int value)
+{
+	if (cJSON_GetObjectItem(object, key))
+		cJSON_ReplaceItemInObject(object, key, cJSON_CreateBool(value));
+	else
+		cJSON_AddBoolToObject(object, key, value);
+}
+
+static void set_null(cJSON *object, const char *key)
+{
+	if (cJSON_GetObjectItem(object, key))
+		cJSON_ReplaceItemInObject(object, key, cJSON_CreateNull());
+	else
+		cJSON_AddNullToObject(object, key);
 }
 
 static cJSON *frame_diff_json(const FrameStateDiff *diff)
@@ -259,5 +279,147 @@ cJSON *tool_verify_frame_change(const cJSON *params)
 	cJSON *result = mcp_structured_tool_result(payload, "frameVerification");
 	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
 	frame_settle_result_clear(&settled);
+	return result;
+}
+
+cJSON *tool_click_and_verify_frame_change(const cJSON *params)
+{
+	const char *capture_id = json_str(params, "captureId", NULL);
+	int image_x = json_int(params, "x", -1);
+	int image_y = json_int(params, "y", -1);
+	int button = json_int(params, "button", 1);
+	int foreground_allowed = cJSON_IsTrue(
+		cJSON_GetObjectItem(params, "foregroundAllowed"));
+	double max_pre_action = json_double(
+		params, "maxPreActionChangedFraction", 0.0001);
+	DeskpalCapture base = {0};
+	int lookup = captures_lookup(capture_id, &base);
+	if (lookup == -2)
+		return mcp_tool_error_result(
+			"captureId is stale; take a fresh get_app_state observation");
+	if (lookup != 0 || base.target != DESKPAL_CAPTURE_WINDOW ||
+	    !base.frame_projection || !base.frame_revision[0])
+		return mcp_tool_error_result(
+			"captureId has no retained visual projection for verification");
+	int isolated = getenv("DESKPAL_HEADLESS_ACTIVE") != NULL;
+	if (!isolated && !foreground_allowed)
+		return mcp_tool_error_result(
+			"Visible-desktop pixel delivery requires foregroundAllowed: true");
+	if (image_x < 0 || image_x >= base.image_width ||
+	    image_y < 0 || image_y >= base.image_height)
+		return mcp_tool_error_result(
+			"x/y fall outside the retained capture image");
+	if (!capture_window_still_valid(&base))
+		return mcp_tool_error_result(
+			"Captured X11 target was replaced or its geometry changed");
+	int source_x = (int)((int64_t)image_x * base.source_width /
+	                     base.image_width);
+	int source_y = (int)((int64_t)image_y * base.source_height /
+	                     base.image_height);
+	ScreenshotFrame preflight_frame;
+	ScreenshotFrame preflight_projection;
+	FrameStateSignature preflight_signature;
+	FrameStateDiff preflight_change;
+	memset(&preflight_projection, 0, sizeof(preflight_projection));
+	if (screenshot_capture_frame(base.window_id, &preflight_frame) != 0 ||
+	    frame_state_signature(&preflight_frame, &preflight_signature) != 0 ||
+	    frame_state_project(
+	        &preflight_frame, DESKPAL_FRAME_PROJECTION_MAX_DIMENSION,
+	        DESKPAL_FRAME_PROJECTION_MAX_DIMENSION,
+	        &preflight_projection) != 0) {
+		screenshot_frame_clear(&preflight_frame);
+		screenshot_frame_clear(&preflight_projection);
+		return mcp_tool_error_result("Could not verify the pre-action frame");
+	}
+	screenshot_frame_clear(&preflight_frame);
+	ScreenshotFrame retained_projection = {
+		.pixels = base.frame_projection,
+		.length = base.frame_projection_len,
+		.width = base.frame_projection_width,
+		.height = base.frame_projection_height,
+		.depth = 24,
+	};
+	int preflight_comparable = frame_state_compare(
+		&retained_projection, &preflight_projection,
+		json_int(params, "tolerance", 0), &preflight_change) == 0 &&
+		preflight_change.comparable;
+	screenshot_frame_clear(&preflight_projection);
+	if (!preflight_comparable ||
+	    preflight_change.changed_fraction > max_pre_action)
+		return mcp_tool_error_result(
+			"Captured frame changed beyond the allowed pre-action threshold; observe again");
+	if (!capture_window_still_valid(&base))
+		return mcp_tool_error_result(
+			"Captured X11 target changed before click delivery");
+
+	unsigned long focus_before = x11_get_active_window();
+	X11StackingSnapshot stacking_before = {0};
+	X11StackingSnapshot stacking_after = {0};
+	int stacking_before_known =
+		x11_get_stacking_snapshot(&stacking_before) == 0;
+	char action_error[256] = {0};
+	int action_rc = pixel_click_window(
+		base.window_id, source_x, source_y, button, 1,
+		action_error, sizeof(action_error));
+
+	cJSON *verification_result = action_rc == 0
+		? tool_verify_frame_change(params) : NULL;
+	cJSON *verification = verification_result
+		? cJSON_DetachItemFromObject(
+			verification_result, "frameVerification") : NULL;
+	cJSON_Delete(verification_result);
+	if (!verification) {
+		verification = cJSON_CreateObject();
+		cJSON_AddStringToObject(verification, "status",
+		                      action_rc == 0 ? "verification_error" : "action_failed");
+		cJSON_AddBoolToObject(verification, "verified", 0);
+		if (action_error[0])
+			cJSON_AddStringToObject(verification, "error", action_error);
+	}
+
+	unsigned long focus_after = x11_get_active_window();
+	int stacking_after_known =
+		x11_get_stacking_snapshot(&stacking_after) == 0;
+	int stacking_known = stacking_before_known && stacking_after_known;
+	int stacking_changed = stacking_known &&
+		!x11_stacking_snapshots_equal(&stacking_before, &stacking_after);
+	int verified = action_rc == 0 && cJSON_IsTrue(
+		cJSON_GetObjectItem(verification, "verified"));
+	set_bool(verification, "actionAttributed", verified);
+	cJSON_AddBoolToObject(verification, "verificationBoundToAction", 1);
+	cJSON_AddStringToObject(verification, "deliveryRoute",
+	                      isolated ? "x11-private-session" : "shared-seat-x11");
+	cJSON_AddBoolToObject(verification, "foregroundAllowed", foreground_allowed);
+	cJSON_AddBoolToObject(verification, "actionIssued", action_rc == 0);
+	cJSON_AddBoolToObject(verification, "preActionExactMatch",
+	                     strcmp(preflight_signature.revision,
+	                            base.frame_revision) == 0);
+	cJSON_AddNumberToObject(verification, "preActionChangedFraction",
+	                       preflight_change.changed_fraction);
+	cJSON_AddNumberToObject(verification, "maxPreActionChangedFraction",
+	                       max_pre_action);
+	cJSON_AddStringToObject(verification, "action", "click");
+	cJSON_AddNumberToObject(verification, "imageX", image_x);
+	cJSON_AddNumberToObject(verification, "imageY", image_y);
+	cJSON_AddNumberToObject(verification, "sourceX", source_x);
+	cJSON_AddNumberToObject(verification, "sourceY", source_y);
+	cJSON_AddNumberToObject(verification, "button", button);
+	set_bool(verification, "inputDelivered", action_rc == 0);
+	set_bool(verification, "sharedPointerMoved", action_rc == 0 && !isolated);
+	if (focus_before && focus_after)
+		set_bool(verification, "focusChanged", focus_before != focus_after);
+	else
+		set_null(verification, "focusChanged");
+	cJSON_AddBoolToObject(verification, "stackingKnown", stacking_known);
+	if (stacking_known)
+		set_bool(verification, "stackingChanged", stacking_changed);
+	else
+		set_null(verification, "stackingChanged");
+	set_bool(verification, "clipboardChanged", 0);
+	x11_free_stacking_snapshot(&stacking_before);
+	x11_free_stacking_snapshot(&stacking_after);
+	cJSON *result = mcp_structured_tool_result(
+		verification, "pixelActionVerification");
+	if (!verified) cJSON_AddBoolToObject(result, "isError", 1);
 	return result;
 }

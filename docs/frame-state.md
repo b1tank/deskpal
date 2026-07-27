@@ -59,6 +59,26 @@ smoothed by projection and require a larger region or lower threshold.
 This verification proves only that the requested visual postcondition is true
 relative to the capture. It returns `actionAttributed: false`: a separate action
 may have occurred between capture and verification, and Deskpal does not claim
-causality. Full pixel-action verification must execute one explicitly approved
-delivery route and visual postcondition as a single orchestrated operation while
-reporting that route's pointer, focus, stacking, and clipboard side effects.
+causality.
+
+`click_and_verify_frame_change` is the first bound pixel-action slice. Immediately
+before dispatch it compares the current bounded projection with the retained
+projection and refuses change above `maxPreActionChangedFraction`; that threshold
+must be lower than the required post-action change. It also reports whether the
+full-frame revision matched exactly. This permits explicitly bounded incidental
+noise such as a caret blink without accepting a materially stale baseline. The
+tool revalidates exact window identity again, maps capture-image coordinates to
+source pixels, delivers one X11 click, settles the frame, and evaluates the same
+explicit regional postcondition in one operation. A verified result reports
+`verificationBoundToAction: true`, the delivery route, input issuance, shared
+pointer movement, focus change when knowable, and stacking change when complete
+EWMH snapshots are available.
+
+On the visible desktop this remains a shared-seat compatibility route and refuses
+unless `foregroundAllowed: true` is explicit. It can move the human pointer and
+may change focus; it is not the north-star background broker. Inside an isolated
+session the same operation reports the private X11 route and does not claim host
+shared-pointer movement. Concurrent human or application activity can still
+produce visual changes, so attribution means the preflight/action/verification
+were bound into one Deskpal operation—not cryptographic proof of exclusive
+causality.
