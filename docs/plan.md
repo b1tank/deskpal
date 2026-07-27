@@ -211,8 +211,14 @@ broker actions will drive.
 
 ### Phase 2 — prove non-interfering host control
 
-- [ ] Specify the broker protocol, threat model, surface identity, capability
-      negotiation, cancellation, and verification contract.
+- [x] Specify the broker protocol, threat model, grant ownership, replacement-
+      safe surface identity, capability negotiation, frame/action binding,
+      cancellation/outcome states, limits, errors, and verification evidence;
+      see [`broker-protocol.md`](broker-protocol.md).
+- [ ] Prove whether stock GNOME/Mutter exposes a compositor-enforced primitive
+      for exact covered-surface input without pointer, focus, stacking, or
+      workspace changes. Keep the indicator extension input-free and report
+      `backgroundUnavailable` if no supported primitive exists.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or

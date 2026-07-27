@@ -72,7 +72,9 @@ compatibility mechanisms differ from that plan, `plan.md` is authoritative.
 
 The product roadmap is maintained in [plan.md](plan.md). In short: prefer
 verified semantic actions, then a trusted compositor broker that addresses an
-exact surface without changing the human pointer, focus, or stacking. Keep
+exact surface without changing the human pointer, focus, or stacking. The
+backend-neutral security and evidence contract is specified in
+[broker-protocol.md](broker-protocol.md). Keep
 shared-seat X11, portal input, forced focus, and forced XWayland only as
 explicit compatibility fallbacks while those routes are replaced and retired.
 

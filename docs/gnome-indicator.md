@@ -68,7 +68,10 @@ A visual run passes only when:
 
 The overlay is only an ownership indicator. It must never be presented as proof
 that a future action used non-interfering input; action results must report the
-real delivery route separately.
+real delivery route separately. It must also remain input-free: do not add
+virtual-device, capture, focus, activation, or surface-control methods to this
+D-Bus interface. The trusted broker is a separate compositor security boundary
+defined in [`broker-protocol.md`](broker-protocol.md).
 
 ## Deskpal and Pi hello world
 
