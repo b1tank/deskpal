@@ -164,6 +164,23 @@ A proof may initially support one pointer, one button, one toplevel, no active
 grab, and a dedicated nested compositor. Unsupported states must return
 `backgroundUnavailable` before dispatch.
 
+## Private implementation progress
+
+The private local Mutter branch now proves two prerequisites without changing
+or advertising any public Deskpal capability:
+
+- a pointer-only secondary `wl_seat` filtered to one exact Wayland client, hidden
+  from another client, and removed on disconnect; and
+- direct standard Wayland pointer enter/motion/button/frame/leave delivery to an
+  authorized mapped XDG toplevel with generation and input-region checks while
+  the ordinary human seat's pointer focus remains unchanged.
+
+The nested test rejects a second client's toplevel, stale generation, and
+out-of-region coordinates. This is still a test-only operation. It has no trusted
+grant transport, operation/replay state, revocation, protected-surface policy,
+popup/grab/constraint handling, Xwayland route, or application-state proof.
+`backgroundUnavailable` therefore remains the only truthful public capability.
+
 ## Next steps
 
 1. Keep `get_environment_status` truthful: stock GNOME has no background pixel

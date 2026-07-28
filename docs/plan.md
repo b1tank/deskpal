@@ -228,6 +228,16 @@ broker actions will drive.
       compositor; stop if Wayland/Xwayland protocol semantics or non-interference
       cannot be kept. Never submit or push this work upstream/publicly, never
       vendor it into Deskpal, and install it only to an isolated local prefix.
+  - [x] Prove a caller-filtered secondary `wl_seat` visible to one exact client,
+        with pointer-only capability and disconnect cleanup.
+  - [x] Prove standard pointer enter/motion/press/frame/release/frame/leave/frame
+        delivery to an authorized mapped XDG toplevel while the human seat's
+        pointer focus remains unchanged; reject another client, stale generation,
+        invalid input-region coordinates, hidden/unmapped/modal, and Xwayland
+        targets.
+  - [ ] Add the private grant/operation state machine, revocation, replacement,
+        popup/grab/constraint/protected-surface refusal, and a fixture state-change
+        proof before exposing any broker transport.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or
