@@ -181,10 +181,20 @@ grabs. A private operation manager adds unique IDs, replay rejection,
 pre-dispatch cancellation, generation recheck, revocation, and explicit
 accepted/dispatching/dispatched/completed/cancelled/unknown/failed/revoked states.
 
+The private nested proof now maps two equal-sized XDG toplevels at the same frame
+rectangle, activates and raises the foreground client, and dispatches the
+independent-seat operation to the fully covered target. Only the target commits
+a changed buffer after receiving the pointer sequence. Focus, top-of-stack
+window, both frame rectangles, both workspaces, human-seat pointer focus, and the
+foreground fixture's state remain unchanged across dispatch. The operation layer
+also covers unique IDs, replay rejection, pre-dispatch cancellation, replacement
+recheck, revocation, and fail-closed states.
+
 This remains test-only. It has no authenticated grant transport, permission UI,
-protected-surface classifier, complete popup/drag policy evidence, Xwayland
-route, or covered two-fixture application-state proof. `backgroundUnavailable`
-therefore remains the only truthful public capability.
+protected-surface classifier, complete popup/drag/cancellation/unknown-outcome
+evidence, independent physical pointer/clipboard measurement, broker-stream
+before/after frames, or Xwayland route. `backgroundUnavailable` therefore remains
+the only truthful public capability.
 
 ## Next steps
 

@@ -239,9 +239,14 @@ broker actions will drive.
         dispatched/completed/cancelled/unknown/failed/revoked states, idempotent
         pre-dispatch cancellation, generation recheck, revocation, input-region,
         human-grab, and pointer-constraint refusal.
-  - [ ] Add protected-surface policy, authenticated grant transport, explicit
-        popup/drag/constraint evidence, and a covered two-fixture state-change
-        proof before exposing any broker transport.
+  - [x] Prove in nested Mutter that a fully covered authorized XDG target changes
+        its committed application buffer while a same-geometry foreground window
+        remains focused/topmost; preserve frame rectangles, workspaces, human-seat
+        pointer focus, and foreground fixture state.
+  - [ ] Add authenticated grant transport, protected-surface and restart
+        generations, explicit popup/drag/constraint/cancellation/unknown-outcome
+        evidence, clipboard/pointer-position evidence, and broker-stream frame
+        verification before exposing any Deskpal broker capability.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or
