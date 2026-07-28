@@ -235,8 +235,12 @@ broker actions will drive.
         pointer focus remains unchanged; reject another client, stale generation,
         invalid input-region coordinates, hidden/unmapped/modal, and Xwayland
         targets.
-  - [ ] Add the private grant/operation state machine, revocation, replacement,
-        popup/grab/constraint/protected-surface refusal, and a fixture state-change
+  - [x] Add private unique operation IDs, replay rejection, accepted/dispatching/
+        dispatched/completed/cancelled/unknown/failed/revoked states, idempotent
+        pre-dispatch cancellation, generation recheck, revocation, input-region,
+        human-grab, and pointer-constraint refusal.
+  - [ ] Add protected-surface policy, authenticated grant transport, explicit
+        popup/drag/constraint evidence, and a covered two-fixture state-change
         proof before exposing any broker transport.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface

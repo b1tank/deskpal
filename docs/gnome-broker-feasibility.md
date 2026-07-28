@@ -175,11 +175,16 @@ or advertising any public Deskpal capability:
   authorized mapped XDG toplevel with generation and input-region checks while
   the ordinary human seat's pointer focus remains unchanged.
 
-The nested test rejects a second client's toplevel, stale generation, and
-out-of-region coordinates. This is still a test-only operation. It has no trusted
-grant transport, operation/replay state, revocation, protected-surface policy,
-popup/grab/constraint handling, Xwayland route, or application-state proof.
-`backgroundUnavailable` therefore remains the only truthful public capability.
+The nested test rejects a second client's toplevel, stale generation,
+out-of-region coordinates, pointer constraints, and active human-seat implicit
+grabs. A private operation manager adds unique IDs, replay rejection,
+pre-dispatch cancellation, generation recheck, revocation, and explicit
+accepted/dispatching/dispatched/completed/cancelled/unknown/failed/revoked states.
+
+This remains test-only. It has no authenticated grant transport, permission UI,
+protected-surface classifier, complete popup/drag policy evidence, Xwayland
+route, or covered two-fixture application-state proof. `backgroundUnavailable`
+therefore remains the only truthful public capability.
 
 ## Next steps
 
