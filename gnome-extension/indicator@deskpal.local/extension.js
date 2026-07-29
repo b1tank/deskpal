@@ -221,7 +221,9 @@ class LogicalCursor {
 function boundedShellString(value) {
     if (value === null || value === undefined)
         return null;
-    return String(value).slice(0, SHELL_BRIDGE_MAX_STRING_CHARACTERS);
+    return String(value)
+        .replace(/[\x00-\x1F\x7F]/g, ' ')
+        .slice(0, SHELL_BRIDGE_MAX_STRING_CHARACTERS);
 }
 
 function shellValue(object, method, fallback = null) {

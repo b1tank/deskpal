@@ -7,6 +7,7 @@
 #include "shell_bridge.h"
 
 #include <dbus/dbus.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,9 +30,27 @@ static void set_error(char *error, size_t error_len, const char *message)
 
 static int bounded_string_or_null(const cJSON *value, size_t limit)
 {
-	return cJSON_IsNull(value) ||
-	       (cJSON_IsString(value) && value->valuestring &&
-	        strlen(value->valuestring) <= limit);
+	if (cJSON_IsNull(value)) return 1;
+	if (!cJSON_IsString(value) || !value->valuestring ||
+	    strlen(value->valuestring) > limit)
+		return 0;
+	for (const unsigned char *cursor = (const unsigned char *)value->valuestring;
+	     *cursor; cursor++)
+		if (*cursor < 0x20 || *cursor == 0x7f) return 0;
+	return 1;
+}
+
+static int safe_id(const cJSON *value)
+{
+	if (!cJSON_IsString(value) || !value->valuestring ||
+	    !value->valuestring[0] ||
+	    strlen(value->valuestring) > SHELL_BRIDGE_ID_LIMIT)
+		return 0;
+	for (const unsigned char *cursor = (const unsigned char *)value->valuestring;
+	     *cursor; cursor++)
+		if (!isalnum(*cursor) && *cursor != '_' && *cursor != '-' && *cursor != '.')
+			return 0;
+	return 1;
 }
 
 static int positive_integer(const cJSON *value)
@@ -52,9 +71,7 @@ static int validate_common(const cJSON *root)
 	const cJSON *instance = cJSON_GetObjectItem(root, "shellInstanceId");
 	return cJSON_IsObject(root) && cJSON_IsNumber(version) &&
 	       version->valuedouble == DESKPAL_SHELL_BRIDGE_PROTOCOL_VERSION &&
-	       cJSON_IsString(instance) && instance->valuestring &&
-	       instance->valuestring[0] &&
-	       strlen(instance->valuestring) <= SHELL_BRIDGE_ID_LIMIT;
+	       safe_id(instance);
 }
 
 static int validate_capabilities(const cJSON *root)
@@ -105,9 +122,7 @@ static int validate_window(const cJSON *window)
 	const cJSON *client = cJSON_GetObjectItem(window, "clientType");
 	const cJSON *focused = cJSON_GetObjectItem(window, "focused");
 	const cJSON *hidden = cJSON_GetObjectItem(window, "hidden");
-	if (!cJSON_IsString(surface) || !surface->valuestring ||
-	    !surface->valuestring[0] ||
-	    strlen(surface->valuestring) > SHELL_BRIDGE_ID_LIMIT ||
+	if (!safe_id(surface) ||
 	    !positive_integer(generation) || !positive_integer(geometry) ||
 	    !cJSON_IsString(backend) ||
 	    strcmp(backend->valuestring, "gnome-shell-extension") != 0 ||

@@ -135,5 +135,7 @@ window, monitor, identity, geometry, and boolean field before returning an
 object to the tool layer. Malformed, oversized, unsupported-method, and
 incompatible-version fixtures fail closed. Visible-desktop environment reporting
 now exposes the validated bridge instance and capability object; private sessions
-do not contact the host bridge. Mixed-backend window listing, GNOME 45+
-packaging, and live runtime acceptance remain pending.
+do not contact the host bridge. Visible-desktop window listing appends only
+native-Wayland bridge records, preserving complete Shell identity and omitting
+Shell-observed Xwayland duplicates; legacy control tools continue to accept only
+XIDs. GNOME 45+ packaging and live runtime acceptance remain pending.

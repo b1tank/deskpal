@@ -60,6 +60,9 @@ int main(void)
 	expect_invalid("ListWindows",
 		"{\"protocolVersion\":1,\"shellInstanceId\":\"instance-1\","
 		"\"complete\":true,\"windows\":[{\"surfaceId\":\"bad\"}]}" );
+	expect_invalid("ListWindows",
+		"{\"protocolVersion\":1,\"shellInstanceId\":\"bad:instance\","
+		"\"complete\":true,\"windows\":[]}" );
 	expect_invalid("UnknownMethod",
 		"{\"protocolVersion\":1,\"shellInstanceId\":\"instance-1\"}");
 

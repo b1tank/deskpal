@@ -11,7 +11,7 @@ deskpal controls the Linux desktop via the [Model Context Protocol](https://mode
 | Tool | Description |
 |------|-------------|
 | `screenshot` | Capture any window or full screen as PNG; optionally downscale with source-coordinate metadata |
-| `list_windows` | List top-level app windows with IDs, titles, `WM_CLASS`, geometry, PID; optionally include recursive helpers/dialogs |
+| `list_windows` | List X11/Xwayland windows and, with the optional read-only GNOME bridge, native-Wayland metadata using separate backend-scoped IDs; optionally include recursive X11 helpers/dialogs |
 | `accessibility_status` | Cheaply report whether the optional AT-SPI backend is compiled and connected |
 | `get_accessibility_tree` | Return a scoped, bounded semantic tree with roles, names, states, logical bounds, actions, optional attributes/text, and short-lived locators |
 | `get_app_state` | Capture one exact X11/Xwayland window with stable identity, image transform, bounded semantics, revision, and optional diff |

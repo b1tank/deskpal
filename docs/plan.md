@@ -263,7 +263,9 @@ broker actions will drive.
   - [x] Integrate validated bridge capability and instance status into
         environment discovery without contacting the host bus from private
         sessions.
-  - [ ] Add native windows to window listing without mixing Shell IDs with XIDs.
+  - [x] Add native-Wayland records to visible-desktop window listing with full
+        Shell-instance identity, omit Shell-observed Xwayland duplicates, and
+        keep private sessions isolated from the host bus.
   - [ ] Add and runtime-test the GNOME 45+ artifact and release packaging.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface

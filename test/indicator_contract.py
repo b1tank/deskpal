@@ -51,6 +51,8 @@ def main():
     require("org.deskpal.ShellBridge1" in source, "missing Shell bridge interface")
     require("SHELL_BRIDGE_PROTOCOL_VERSION = 1" in source, "missing protocol version")
     require("SHELL_BRIDGE_MAX_WINDOWS = 256" in source, "window list must be bounded")
+    require(r"/[\x00-\x1F\x7F]/g" in source,
+            "untrusted window strings must not inject controls")
     require("shellInstanceId" in source, "missing Shell-instance identity")
     require("surfaceId" in source and "generation" in source,
             "missing replacement-safe window identity")
