@@ -243,10 +243,14 @@ broker actions will drive.
         its committed application buffer while a same-geometry foreground window
         remains focused/topmost; preserve frame rectangles, workspaces, human-seat
         pointer focus, and foreground fixture state.
-  - [ ] Add authenticated grant transport, protected-surface and restart
-        generations, explicit popup/drag/constraint/cancellation/unknown-outcome
-        evidence, clipboard/pointer-position evidence, and broker-stream frame
-        verification before exposing any Deskpal broker capability.
+  - [x] Bind private operations to one caller identity, the seat's canonical
+        client, exact surface generation, pointer/background capabilities, and
+        monotonic expiry; synchronously revoke pending operations on explicit
+        revocation, expiry, surface destruction, or caller disconnect.
+  - [ ] Connect those grants to authenticated transport; add protected-surface
+        and restart generations, explicit popup/drag/constraint/cancellation/
+        unknown-outcome evidence, clipboard/pointer-position evidence, and
+        broker-stream frame verification before exposing any Deskpal capability.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or

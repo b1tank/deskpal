@@ -331,8 +331,15 @@ the route is advertised. A live manual demo alone is not acceptance.
 The first backend-neutral foundation is implemented in `csrc/broker_contract.*`:
 opaque instance/surface generations, capability checks, stable error names, and
 fail-closed operation transitions. It advertises no compositor capability and
-performs no mutation. Grants, parsing, backend transport, and compositor work
-remain separate milestones.
+performs no mutation.
+
+The private nested Mutter proof now has a test-only caller-bound grant between
+surface authorization and operation dispatch. It binds exact client/surface
+generation, bounded pointer/background capabilities, and monotonic expiry, and
+revokes pending operations on expiry, explicit revocation, surface destruction,
+or caller disconnect. This is not authenticated transport or trusted permission
+UI and does not change the public capability result. Parsing and backend
+transport remain separate milestones.
 
 1. Extend the foundation with grant ownership and bounded wire parsing only when
    a private compositor transport exists; do not invent an unauthenticated local

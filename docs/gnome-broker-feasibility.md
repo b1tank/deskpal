@@ -188,9 +188,14 @@ a changed buffer after receiving the pointer sequence. Focus, top-of-stack
 window, both frame rectangles, both workspaces, human-seat pointer focus, and the
 foreground fixture's state remain unchanged across dispatch. The operation layer
 also covers unique IDs, replay rejection, pre-dispatch cancellation, replacement
-recheck, revocation, and fail-closed states.
+recheck, revocation, and fail-closed states. A private grant layer now binds
+operations to one caller identity, the seat's canonical client, exact surface
+generation, bounded pointer/background capabilities, and monotonic expiry. It
+rechecks at acceptance and dispatch, and synchronously revokes pending operations
+on expiry, explicit revocation, surface destruction, or caller disconnect.
 
-This remains test-only. It has no authenticated grant transport, permission UI,
+This remains test-only. The caller identity is injected by the test rather than
+an authenticated peer, and there is no grant transport or permission UI,
 protected-surface classifier, complete popup/drag/cancellation/unknown-outcome
 evidence, independent physical pointer/clipboard measurement, broker-stream
 before/after frames, or Xwayland route. `backgroundUnavailable` therefore remains
