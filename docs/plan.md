@@ -251,6 +251,12 @@ broker actions will drive.
         and restart generations, explicit popup/drag/constraint/cancellation/
         unknown-outcome evidence, clipboard/pointer-position evidence, and
         broker-stream frame verification before exposing any Deskpal capability.
+- [ ] Add the optional, read-only GNOME Shell bridge defined in
+      [`shell-bridge-protocol.md`](shell-bridge-protocol.md): bounded native-
+      Wayland window enumeration, replacement-safe Shell-scoped identity,
+      monitor layout, capability negotiation, and separate GNOME 42–44 and
+      45+ artifacts. Keep the existing indicator visual-only and advertise no
+      capture, window-management, or input capability.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or
