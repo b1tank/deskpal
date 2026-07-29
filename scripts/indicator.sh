@@ -5,6 +5,9 @@ UUID=indicator@deskpal.local
 SERVICE=org.deskpal.Indicator
 OBJECT=/org/deskpal/Indicator
 INTERFACE=org.deskpal.Indicator
+BRIDGE_SERVICE=org.deskpal.ShellBridge
+BRIDGE_OBJECT=/org/deskpal/ShellBridge
+BRIDGE_INTERFACE=org.deskpal.ShellBridge1
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TARGET="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/$UUID"
 PACKAGER="$ROOT/scripts/package-gnome-extension.py"
@@ -32,16 +35,22 @@ call() {
         --method "$INTERFACE.$1" "${@:2}"
 }
 
+bridge_call() {
+    gdbus call --session --dest "$BRIDGE_SERVICE" --object-path "$BRIDGE_OBJECT" \
+        --method "$BRIDGE_INTERFACE.$1" "${@:2}"
+}
+
 wait_for_service() {
     local attempts=30
     while (( attempts > 0 )); do
-        if call Ping >/dev/null 2>&1; then
+        if call Ping >/dev/null 2>&1 &&
+           bridge_call GetCapabilities >/dev/null 2>&1; then
             return 0
         fi
         attempts=$((attempts - 1))
         sleep 0.2
     done
-    echo "Deskpal indicator did not appear on D-Bus." >&2
+    echo "Deskpal indicator and read-only Shell bridge did not both appear on D-Bus." >&2
     echo "Check: journalctl --user -f -o cat /usr/bin/gnome-shell" >&2
     return 1
 }
@@ -78,7 +87,11 @@ install_extension() {
         return 0
     fi
     gnome-extensions enable "$UUID"
-    wait_for_service
+    if ! wait_for_service; then
+        echo "Installed $UUID, but GNOME Shell is still running cached extension code."
+        echo "Log out and back in, then run '$0 enable'."
+        return 0
+    fi
     echo "Installed and enabled $UUID"
 }
 

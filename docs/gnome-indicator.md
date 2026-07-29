@@ -38,9 +38,11 @@ modern artifact is refused unless
 `DESKPAL_EXPERIMENTAL_GNOME_EXTENSION=1` is explicitly set for testing.
 
 GNOME Shell 42 on Wayland discovers a newly installed local extension only when
-the Shell session starts and caches its JavaScript until that session ends. If
-installation asks for a restart, or after changing the extension code, log out
-and back in once, then run `scripts/indicator.sh enable` followed by the demo.
+the Shell session starts and caches its JavaScript until that session ends. The
+installer verifies both the indicator and read-only bridge rather than accepting
+an older cached indicator alone. If installation asks for a restart, or after
+changing the extension code, log out and back in once, then run
+`scripts/indicator.sh enable` followed by the demo.
 
 The demo shows blue `agent-1` and orange `agent-2` cursors moving independently.
 Move the physical mouse during the demo: it must remain independent, and the

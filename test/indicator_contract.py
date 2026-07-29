@@ -85,6 +85,8 @@ def main():
     require("St.DrawingArea" in source, "cursor must use a drawn pointer shape")
     require("deskpal-agent-cursor-pointer" in stylesheet, "missing pointer style")
     require("gdbus call --session" in script, "demo must use the session bus")
+    require("bridge_call GetCapabilities" in script,
+            "installer must verify both packaged services")
     require("xdotool" not in script and "ydotool" not in script, "demo must not move input")
     require('pi.on("agent_settled"' in pi_extension, "Pi must release idle control")
     require('callTool("release_control"' in pi_extension, "Pi release hook must call Deskpal")
