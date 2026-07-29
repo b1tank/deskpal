@@ -32,7 +32,9 @@ Version 1 exports three read-only methods:
 
 JSON is used as an explicitly versioned compatibility envelope between GNOME
 Shell JavaScript versions and the Deskpal native process. Every response is
-bounded before serialization. A malformed, oversized, unknown-version, or
+bounded before serialization. Strings are limited to 512 Unicode characters;
+the native client additionally enforces a bounded response size. A malformed,
+oversized, unknown-version, or
 incomplete response fails closed.
 
 ## Capability response
@@ -55,7 +57,7 @@ incomplete response fails closed.
   },
   "limits": {
     "maxWindows": 256,
-    "maxStringBytes": 512
+    "maxStringCharacters": 512
   }
 }
 ```

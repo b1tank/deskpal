@@ -1,7 +1,7 @@
 /* exported init */
 'use strict';
 
-const {Clutter, Gio, GLib, St} = imports.gi;
+const {Clutter, Gio, GLib, Meta, St} = imports.gi;
 const Main = imports.ui.main;
 
 const SERVICE_NAME = 'org.deskpal.Indicator';
@@ -45,6 +45,28 @@ const INTERFACE_XML = `
     </method>
     <method name="ClearAll"/>
     <method name="ListCursors">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+  </interface>
+</node>`;
+
+const SHELL_BRIDGE_SERVICE = 'org.deskpal.ShellBridge';
+const SHELL_BRIDGE_PATH = '/org/deskpal/ShellBridge';
+const SHELL_BRIDGE_INTERFACE = 'org.deskpal.ShellBridge1';
+const SHELL_BRIDGE_PROTOCOL_VERSION = 1;
+const SHELL_BRIDGE_MAX_WINDOWS = 256;
+const SHELL_BRIDGE_MAX_STRING_CHARACTERS = 512;
+
+const SHELL_BRIDGE_XML = `
+<node>
+  <interface name="${SHELL_BRIDGE_INTERFACE}">
+    <method name="GetCapabilities">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+    <method name="ListWindows">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+    <method name="GetMonitorLayout">
       <arg name="json" type="s" direction="out"/>
     </method>
   </interface>
@@ -193,6 +215,196 @@ class LogicalCursor {
             renderedX: Math.round(this.actor.x),
             renderedY: Math.round(this.actor.y),
         };
+    }
+}
+
+function boundedShellString(value) {
+    if (value === null || value === undefined)
+        return null;
+    return String(value).slice(0, SHELL_BRIDGE_MAX_STRING_CHARACTERS);
+}
+
+function shellValue(object, method, fallback = null) {
+    if (!object || typeof object[method] !== 'function')
+        return fallback;
+    return object[method]();
+}
+
+function shellClientType(window) {
+    const value = shellValue(window, 'get_client_type');
+    if (value === Meta.WindowClientType.WAYLAND)
+        return 'wayland';
+    if (value === Meta.WindowClientType.X11)
+        return 'x11';
+    return 'unknown';
+}
+
+class ShellBridgeService {
+    constructor() {
+        this._shellInstanceId = GLib.uuid_string_random();
+        this._nextSurfaceId = 1;
+        this._windows = new Map();
+        this._dbusObject = Gio.DBusExportedObject.wrapJSObject(
+            SHELL_BRIDGE_XML, this);
+        this._dbusObject.export(Gio.DBus.session, SHELL_BRIDGE_PATH);
+        this._nameId = Gio.bus_own_name_on_connection(
+            Gio.DBus.session,
+            SHELL_BRIDGE_SERVICE,
+            Gio.BusNameOwnerFlags.NONE,
+            null,
+            null);
+    }
+
+    _monitorScale(index) {
+        try {
+            return global.display.get_monitor_scale(index);
+        } catch (_error) {
+            return St.ThemeContext.get_for_stage(global.stage).scale_factor;
+        }
+    }
+
+    _monitorLayout() {
+        const primaryIndex = Main.layoutManager.primaryIndex;
+        return Main.layoutManager.monitors.map((monitor, index) => ({
+            index,
+            x: monitor.x,
+            y: monitor.y,
+            width: monitor.width,
+            height: monitor.height,
+            scale: this._monitorScale(index),
+            primary: index === primaryIndex,
+        }));
+    }
+
+    _liveWindows() {
+        return global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .filter(window => window &&
+                !shellValue(window, 'is_override_redirect', false))
+            .filter(window =>
+                shellValue(window, 'get_window_type') !== Meta.WindowType.DESKTOP);
+    }
+
+    _identityFor(window, geometrySignature) {
+        let identity = this._windows.get(window);
+        if (!identity) {
+            identity = {
+                surfaceId: `gnome-window-${this._nextSurfaceId++}`,
+                generation: 1,
+                geometryRevision: 1,
+                geometrySignature,
+            };
+            this._windows.set(window, identity);
+        } else if (identity.geometrySignature !== geometrySignature) {
+            identity.geometrySignature = geometrySignature;
+            identity.geometryRevision++;
+        }
+        return identity;
+    }
+
+    _windowInfo(window) {
+        const rect = window.get_frame_rect();
+        if (!rect || rect.width <= 0 || rect.height <= 0)
+            return null;
+        const workspace = shellValue(window, 'get_workspace');
+        const workspaceIndex = shellValue(workspace, 'index', -1);
+        const monitor = shellValue(window, 'get_monitor', -1);
+        const scale = monitor >= 0 ? this._monitorScale(monitor) : 1;
+        const geometrySignature = [
+            rect.x, rect.y, rect.width, rect.height,
+            workspaceIndex, monitor, scale,
+        ].join(':');
+        const identity = this._identityFor(window, geometrySignature);
+        const app = Shell.WindowTracker.get_default().get_window_app(window);
+        return {
+            surfaceId: identity.surfaceId,
+            generation: identity.generation,
+            geometryRevision: identity.geometryRevision,
+            title: boundedShellString(shellValue(window, 'get_title')),
+            appId: boundedShellString(shellValue(app, 'get_id')),
+            wmClass: boundedShellString(shellValue(window, 'get_wm_class')),
+            pid: shellValue(window, 'get_pid'),
+            bounds: {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            },
+            workspace: workspaceIndex >= 0 ? workspaceIndex : null,
+            monitor: monitor >= 0 ? monitor : null,
+            scale,
+            focused: global.display.focus_window === window && !Main.overview.visible,
+            hidden: window.minimized === true,
+            clientType: shellClientType(window),
+            backend: 'gnome-shell-extension',
+        };
+    }
+
+    GetCapabilities() {
+        return JSON.stringify({
+            protocolVersion: SHELL_BRIDGE_PROTOCOL_VERSION,
+            backend: 'gnome-shell-extension',
+            shellInstanceId: this._shellInstanceId,
+            coordinateSpace: 'gnome-stage-logical',
+            capabilities: {
+                windowEnumeration: true,
+                monitorLayout: true,
+                windowCapture: false,
+                foregroundWindowManagement: false,
+                surfaceInput: false,
+                backgroundInput: false,
+            },
+            limits: {
+                maxWindows: SHELL_BRIDGE_MAX_WINDOWS,
+                maxStringCharacters: SHELL_BRIDGE_MAX_STRING_CHARACTERS,
+            },
+        });
+    }
+
+    ListWindows() {
+        const live = this._liveWindows();
+        const liveSet = new Set(live);
+        for (const window of this._windows.keys()) {
+            if (!liveSet.has(window))
+                this._windows.delete(window);
+        }
+        const windows = live.slice(0, SHELL_BRIDGE_MAX_WINDOWS)
+            .map(window => this._windowInfo(window))
+            .filter(window => window !== null);
+        const complete = live.length <= SHELL_BRIDGE_MAX_WINDOWS &&
+            windows.length === live.length;
+        return JSON.stringify({
+            protocolVersion: SHELL_BRIDGE_PROTOCOL_VERSION,
+            shellInstanceId: this._shellInstanceId,
+            complete,
+            windows,
+        });
+    }
+
+    GetMonitorLayout() {
+        const [stageWidth, stageHeight] = global.stage.get_size();
+        return JSON.stringify({
+            protocolVersion: SHELL_BRIDGE_PROTOCOL_VERSION,
+            shellInstanceId: this._shellInstanceId,
+            coordinateSpace: 'gnome-stage-logical',
+            stageWidth,
+            stageHeight,
+            primaryIndex: Main.layoutManager.primaryIndex,
+            complete: true,
+            monitors: this._monitorLayout(),
+        });
+    }
+
+    destroy() {
+        this._windows.clear();
+        if (this._nameId) {
+            Gio.bus_unown_name(this._nameId);
+            this._nameId = 0;
+        }
+        if (this._dbusObject) {
+            this._dbusObject.unexport();
+            this._dbusObject = null;
+        }
     }
 }
 
@@ -372,13 +584,18 @@ class IndicatorService {
 
 class DeskpalIndicatorExtension {
     enable() {
-        this._service = new IndicatorService();
+        this._indicatorService = new IndicatorService();
+        this._shellBridgeService = new ShellBridgeService();
     }
 
     disable() {
-        if (this._service) {
-            this._service.destroy();
-            this._service = null;
+        if (this._shellBridgeService) {
+            this._shellBridgeService.destroy();
+            this._shellBridgeService = null;
+        }
+        if (this._indicatorService) {
+            this._indicatorService.destroy();
+            this._indicatorService = null;
         }
     }
 }

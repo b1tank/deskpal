@@ -41,18 +41,38 @@ def main():
             "HideCursor",
             "ClearAll",
             "ListCursors",
+            "GetCapabilities",
+            "ListWindows",
+            "GetMonitorLayout",
         },
         f"unexpected D-Bus methods: {sorted(methods)}",
     )
     require("org.deskpal.Indicator" in source, "missing D-Bus interface")
+    require("org.deskpal.ShellBridge1" in source, "missing Shell bridge interface")
+    require("SHELL_BRIDGE_PROTOCOL_VERSION = 1" in source, "missing protocol version")
+    require("SHELL_BRIDGE_MAX_WINDOWS = 256" in source, "window list must be bounded")
+    require("shellInstanceId" in source, "missing Shell-instance identity")
+    require("surfaceId" in source and "generation" in source,
+            "missing replacement-safe window identity")
+    require("geometryRevision" in source, "missing geometry freshness")
+    require("get_window_actors" in source, "missing native window enumeration")
+    require("windowCapture: false" in source, "bridge must deny capture")
+    require("foregroundWindowManagement: false" in source,
+            "bridge must deny window mutation")
+    require("surfaceInput: false" in source and "backgroundInput: false" in source,
+            "bridge must deny input")
     require("gnome-stage-logical" in source, "missing coordinate-space identity")
     require("onComplete" in source and "sequence" in source, "missing move completion state")
     require("NameOwnerChanged" in source, "owned cursors need disconnect cleanup")
     require("invocation.get_sender()" in source, "mutations must bind to the D-Bus caller")
     require("affectsInputRegion: false" in source, "overlay must be click-through")
     require("reactive: false" in source, "overlay must not receive input")
-    require("Main.activateWindow" not in source, "indicator must not activate windows")
-    require("global.display.focus_window" not in source, "indicator must not alter focus")
+    require("Main.activateWindow" not in source, "extension must not activate windows")
+    require("move_frame" not in source and "move_resize_frame" not in source,
+            "extension must not move or resize windows")
+    require("Shell.Screenshot" not in source, "extension must not capture the desktop")
+    require(not re.search(r"global\.display\.focus_window\s*=(?!=)", source),
+            "extension must not assign focus")
     require("XTest" not in source and "uinput" not in source, "indicator must not inject input")
     require("St.DrawingArea" in source, "cursor must use a drawn pointer shape")
     require("deskpal-agent-cursor-pointer" in stylesheet, "missing pointer style")
