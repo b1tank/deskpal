@@ -179,6 +179,13 @@ def run_suite():
             assert environment["sharedSeat"] is True, environment
             assert environment["control"]["heldByThisProcess"] is False, environment
             assert environment["selectedBackends"]["pointer"] == "xtest", environment
+            assert environment["selectedBackends"]["shellBridge"] == "unavailable"
+            assert environment["capabilities"]["nativeWaylandWindowDiscovery"] == {
+                "available": False,
+                "backend": "unavailable",
+                "sharedSeat": False,
+                "nonInterfering": False,
+            }, environment
             assert environment["capabilities"]["pointerInput"] == {
                 "available": True,
                 "backend": "xtest",

@@ -19,6 +19,7 @@
 #include "semantic_state.h"
 #include "semantic_change.h"
 #include "indicator.h"
+#include "shell_bridge.h"
 #include "accessibility.h"
 #include "ocr.h"
 #include "sessions.h"
@@ -1924,6 +1925,17 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	int indicator_available = indicator_status != NULL;
 	int indicator_single_monitor = indicator_available &&
 		indicator_has_single_full_stage_monitor(indicator_status);
+	char shell_bridge_error[256] = {0};
+	cJSON *shell_bridge_status = NULL;
+	int shell_bridge_available = !headless &&
+		shell_bridge_get_capabilities(&shell_bridge_status,
+		                              shell_bridge_error,
+		                              sizeof(shell_bridge_error)) == 0;
+	const cJSON *shell_capabilities = shell_bridge_available
+		? cJSON_GetObjectItem(shell_bridge_status, "capabilities") : NULL;
+	int native_window_discovery = shell_bridge_available &&
+		cJSON_IsTrue(cJSON_GetObjectItem(shell_capabilities,
+		                                 "windowEnumeration"));
 	int frame_settle_available = !headless;
 	int semantic_wait_available = !headless && semantic_available;
 	int semantic_press_available = semantic_wait_available &&
@@ -1954,6 +1966,8 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                      keyboard_uinput ? "uinput-and-xtest" : "xtest");
 	cJSON_AddStringToObject(backends, "indicator",
 	                      indicator_available ? "gnome-shell-dbus" : "unavailable");
+	cJSON_AddStringToObject(backends, "shellBridge",
+	                      shell_bridge_available ? "gnome-shell-dbus" : "unavailable");
 	cJSON_AddStringToObject(backends, "frameSettling",
 	                      frame_settle_available ? "x11-frame-sampling" : "unavailable");
 	cJSON_AddStringToObject(backends, "verifiedPixelClick",
@@ -2025,6 +2039,12 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	                     environment_capability(semantic_press_available,
 	                         semantic_press_available ? "atspi-with-agent-cursor" : "unavailable",
 	                         0, 0));
+	cJSON_AddItemToObject(capabilities, "nativeWaylandWindowDiscovery",
+	                     environment_capability(native_window_discovery,
+	                         native_window_discovery ? "gnome-shell-dbus" : "unavailable",
+	                         0, native_window_discovery));
+	if (shell_bridge_status)
+		cJSON_AddItemToObject(capabilities, "shellBridgeStatus", shell_bridge_status);
 	cJSON_AddItemToObject(capabilities, "nativeWaylandSurfaceControl",
 	                     environment_capability(0, "unavailable", 0, 0));
 	cJSON_AddItemToObject(capabilities, "backgroundPixelInput",
@@ -2045,6 +2065,10 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	if (wayland)
 		add_environment_notice(blockers, "native_wayland_surface_control_unavailable",
 			"high", "The compatibility desktop backend can control X11/Xwayland surfaces but not arbitrary native Wayland surfaces.");
+	if (wayland && !native_window_discovery)
+		add_environment_notice(blockers, "native_wayland_window_discovery_unavailable",
+			"medium", shell_bridge_error[0] ? shell_bridge_error :
+			"The read-only GNOME Shell bridge is unavailable.");
 	if (!semantic_available)
 		add_environment_notice(blockers, "atspi_unavailable", "medium",
 			"Verified semantic inspection and actions are unavailable in this process.");
@@ -2074,6 +2098,9 @@ cJSON *tool_get_environment_status(const cJSON *params)
 	if (!headless && !indicator_available)
 		add_environment_notice(setup, "install_agent_cursor", NULL,
 			"On supported GNOME 42 systems, run npm run indicator:install, log out and back in, then run scripts/indicator.sh enable.");
+	if (!headless && !shell_bridge_available)
+		add_environment_notice(setup, "install_shell_bridge", NULL,
+			"Install the matching Deskpal GNOME Shell extension, then reload the Shell session; the bridge remains read-only.");
 	if (!semantic_available)
 		add_environment_notice(setup, "enable_accessibility", NULL,
 			"Install the AT-SPI runtime and explicitly enable the target application's accessibility support; never change it silently.");

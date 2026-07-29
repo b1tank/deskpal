@@ -133,5 +133,7 @@ uses a one-second read-only call, caps replies at 256 KiB, requires protocol
 version 1 and a bounded Shell instance ID, and validates every capability,
 window, monitor, identity, geometry, and boolean field before returning an
 object to the tool layer. Malformed, oversized, unsupported-method, and
-incompatible-version fixtures fail closed. Environment reporting, mixed-backend
-window listing, GNOME 45+ packaging, and live runtime acceptance remain pending.
+incompatible-version fixtures fail closed. Visible-desktop environment reporting
+now exposes the validated bridge instance and capability object; private sessions
+do not contact the host bridge. Mixed-backend window listing, GNOME 45+
+packaging, and live runtime acceptance remain pending.

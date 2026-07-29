@@ -188,7 +188,12 @@ On GNOME 42, the optional logical-cursor extension adds
 `deskpal_agent_cursor_hide`. Take a full-screen screenshot first, then pass its
 short-lived `captureId` and image-pixel coordinates to the move tool. The
 indicator is visual only: results explicitly report `inputDelivered: false`.
-Installation and acceptance steps are in [docs/gnome-indicator.md](docs/gnome-indicator.md).
+The same optional package also exposes a separate read-only Shell bridge for
+bounded native-Wayland window and monitor metadata. Its availability and
+explicitly absent capture/input capabilities appear in
+`deskpal_get_environment_status`; see
+[docs/shell-bridge-protocol.md](docs/shell-bridge-protocol.md). Installation and
+indicator acceptance steps are in [docs/gnome-indicator.md](docs/gnome-indicator.md).
 For accessible controls, `deskpal_agent_semantic_press`,
 `deskpal_agent_semantic_set_text`, `deskpal_agent_semantic_set_value`, and
 `deskpal_agent_semantic_select`, and
