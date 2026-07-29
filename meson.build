@@ -38,6 +38,7 @@ core_src = files(
   'csrc/frame_tools.c',
   'csrc/pixel_action.c',
   'csrc/indicator.c',
+  'csrc/shell_bridge.c',
   'csrc/ocr.c',
   'csrc/tools.c',
   'csrc/sessions.c',
@@ -93,6 +94,14 @@ executable('broker-contract-test',
   link_with : broker_contract,
   include_directories : [vendor_inc, include_directories('csrc')],
   c_args : c_args,
+  install : false)
+
+executable('shell-bridge-test',
+  files('test/shell_bridge_test.c', 'csrc/shell_bridge.c'), vendor_src,
+  include_directories : [vendor_inc, include_directories('csrc')],
+  dependencies : [dbus_dep],
+  c_args : c_args,
+  link_args : link_args,
   install : false)
 
 executable('frame-state-test',

@@ -257,6 +257,12 @@ broker actions will drive.
       monitor layout, capability negotiation, and separate GNOME 42–44 and
       45+ artifacts. Keep the existing indicator visual-only and advertise no
       capture, window-management, or input capability.
+  - [x] Add the GNOME 42 bridge service plus a bounded, versioned native D-Bus
+        client/parser with malformed, oversized, and incompatible-response
+        refusal tests.
+  - [ ] Integrate bridge status and native windows into environment discovery
+        and window listing without mixing Shell IDs with XIDs.
+  - [ ] Add and runtime-test the GNOME 45+ artifact and release packaging.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or

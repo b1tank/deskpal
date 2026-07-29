@@ -125,3 +125,13 @@ GNOME Shell 42–44 use the legacy `imports.*` extension entry point. GNOME Shel
 both must expose this exact protocol and pass the same contract fixtures.
 Runtime support is advertised only for Shell versions tested with the matching
 artifact; syntax and metadata checks alone are not runtime acceptance.
+
+## Implementation status
+
+The GNOME 42 extension exports the read-only interface. Deskpal's native client
+uses a one-second read-only call, caps replies at 256 KiB, requires protocol
+version 1 and a bounded Shell instance ID, and validates every capability,
+window, monitor, identity, geometry, and boolean field before returning an
+object to the tool layer. Malformed, oversized, unsupported-method, and
+incompatible-version fixtures fail closed. Environment reporting, mixed-backend
+window listing, GNOME 45+ packaging, and live runtime acceptance remain pending.
