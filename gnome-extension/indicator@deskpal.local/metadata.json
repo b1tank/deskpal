@@ -1,8 +1,8 @@
 {
   "uuid": "indicator@deskpal.local",
-  "name": "Deskpal Agent Indicator",
-  "description": "Shows non-interactive logical cursors and target indicators for Deskpal agents.",
+  "name": "Deskpal Desktop Bridge",
+  "description": "Shows non-interactive Deskpal cursors and exposes bounded read-only native-window metadata.",
   "shell-version": ["42"],
-  "version": 1,
+  "version": 2,
   "url": "https://github.com/b1tank/deskpal"
 }

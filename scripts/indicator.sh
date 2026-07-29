@@ -6,8 +6,8 @@ SERVICE=org.deskpal.Indicator
 OBJECT=/org/deskpal/Indicator
 INTERFACE=org.deskpal.Indicator
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-SOURCE="$ROOT/gnome-extension/$UUID"
 TARGET="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/$UUID"
+PACKAGER="$ROOT/scripts/package-gnome-extension.py"
 
 usage() {
     cat <<'EOF'
@@ -49,15 +49,32 @@ wait_for_service() {
 install_extension() {
     command -v gnome-extensions >/dev/null
     command -v gdbus >/dev/null
-    local package_dir package
+    local package_dir package shell_major
     package_dir=$(mktemp -d)
-    gnome-extensions pack --force --out-dir "$package_dir" "$SOURCE" >/dev/null
-    package="$package_dir/$UUID.shell-extension.zip"
+    "$PACKAGER" --output "$package_dir" >/dev/null
+    shell_major=$(gnome-shell --version | grep -oE '[0-9]+' | head -1)
+    case "$shell_major" in
+        42) package="$package_dir/deskpal-shell-extension-gnome42.zip" ;;
+        45|46|47|48|49|50)
+            if [[ ${DESKPAL_EXPERIMENTAL_GNOME_EXTENSION:-} != 1 ]]; then
+                rm -rf "$package_dir"
+                echo "GNOME $shell_major artifact is syntax-checked but not runtime-accepted." >&2
+                echo "Set DESKPAL_EXPERIMENTAL_GNOME_EXTENSION=1 only for explicit testing." >&2
+                return 1
+            fi
+            package="$package_dir/deskpal-shell-extension-gnome45-50.zip"
+            ;;
+        *)
+            rm -rf "$package_dir"
+            echo "Unsupported GNOME Shell version: ${shell_major:-unknown}" >&2
+            return 1
+            ;;
+    esac
     gnome-extensions install --force "$package"
     rm -rf "$package_dir"
     if ! gnome-extensions list | grep -Fxq "$UUID"; then
         echo "Installed $UUID. GNOME Shell has not loaded the new extension yet."
-        echo "On GNOME Wayland 42, log out and back in, then run '$0 enable'."
+        echo "On GNOME Wayland, log out and back in, then run '$0 enable'."
         return 0
     fi
     gnome-extensions enable "$UUID"

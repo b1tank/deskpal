@@ -266,7 +266,10 @@ broker actions will drive.
   - [x] Add native-Wayland records to visible-desktop window listing with full
         Shell-instance identity, omit Shell-observed Xwayland duplicates, and
         keep private sessions isolated from the host bus.
-  - [ ] Add and runtime-test the GNOME 45+ artifact and release packaging.
+  - [x] Deterministically package the runtime-accepted GNOME 42 legacy artifact
+        and a gated GNOME 45–50 ES-module test artifact from one implementation.
+  - [ ] Run live acceptance on GNOME 45+ before removing its experimental
+        installer gate or making a runtime support claim.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Build a GNOME proof that captures and clicks a covered target surface
       while the human uses another focused window, with no pointer, focus, or

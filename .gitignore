@@ -1,4 +1,7 @@
 build/
+build-asan/
+build-no-atspi/
+dist/
 *.o
 *.a
 *.tgz

@@ -4,15 +4,35 @@ This is the first visual slice of the desktop-broker plan. It draws logical
 agent cursors in GNOME Shell without moving the system pointer, focusing an app,
 raising a window, or injecting input.
 
-It currently supports GNOME Shell 42, matching the development desktop.
+GNOME Shell 42 is the currently runtime-accepted target, matching the
+development desktop. The deterministic packager also emits a GNOME 45–50
+ES-module artifact for explicit compatibility testing, but that artifact is not
+a runtime support claim until its live acceptance suite passes on those Shell
+versions.
 
 ## Install and verify
 
 ```bash
 npm run test:indicator
+npm run indicator:package
 npm run indicator:install
 npm run indicator:demo
 ```
+
+Packaging creates:
+
+```text
+dist/deskpal-shell-extension-gnome42.zip
+dist/deskpal-shell-extension-gnome45-50.zip
+```
+
+The GNOME 42 artifact retains the legacy `imports.*`/`init()` entry point. The
+GNOME 45–50 artifact is generated deterministically from the same implementation
+with ES-module imports and a default `Extension` export. Static tests inspect
+both archives, enforce exact contents and metadata, syntax-check both entry
+points, and prove repeated builds are byte-identical. Automatic installation of
+the modern artifact is refused unless
+`DESKPAL_EXPERIMENTAL_GNOME_EXTENSION=1` is explicitly set for testing.
 
 GNOME Shell 42 on Wayland discovers a newly installed local extension only when
 the Shell session starts and caches its JavaScript until that session ends. If
@@ -30,9 +50,10 @@ npm run indicator:clear
 scripts/indicator.sh uninstall
 ```
 
-## D-Bus contract
+## D-Bus contracts
 
-The session service `org.deskpal.Indicator` exports
+The package contains two deliberately separate read-only/visual services. The
+session service `org.deskpal.Indicator` exports
 `/org/deskpal/Indicator` with these methods:
 
 - `Ping`
@@ -44,7 +65,12 @@ The session service `org.deskpal.Indicator` exports
 - `ClearAll`
 - `ListCursors`
 
-Mutation methods enforce the caller's D-Bus ownership for production `dp-`
+The read-only `org.deskpal.ShellBridge1` interface exports bounded capability,
+native-window, and monitor-layout metadata as specified in
+[`shell-bridge-protocol.md`](shell-bridge-protocol.md). It exposes no capture,
+activation, movement, resize, or input method.
+
+Indicator mutation methods enforce the caller's D-Bus ownership for production `dp-`
 IDs. `ClearAll` removes that caller's owned cursors plus manual/demo cursors; it
 never clears another live process's owned cursor.
 

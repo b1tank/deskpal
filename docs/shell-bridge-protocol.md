@@ -138,4 +138,7 @@ now exposes the validated bridge instance and capability object; private session
 do not contact the host bridge. Visible-desktop window listing appends only
 native-Wayland bridge records, preserving complete Shell identity and omitting
 Shell-observed Xwayland duplicates; legacy control tools continue to accept only
-XIDs. GNOME 45+ packaging and live runtime acceptance remain pending.
+XIDs. Deterministic release packaging now emits a runtime-accepted GNOME 42
+legacy artifact and a gated, syntax-checked GNOME 45–50 ES-module artifact from
+the same implementation. Modern live runtime acceptance remains pending, so its
+installer path requires an explicit experimental opt-in.

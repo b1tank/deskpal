@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Safe static contract checks for the GNOME logical-cursor prototype."""
 
+import hashlib
 import json
 import re
 import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +16,7 @@ METADATA = EXTENSION / "metadata.json"
 STYLESHEET = EXTENSION / "stylesheet.css"
 SCRIPT = ROOT / "scripts" / "indicator.sh"
 PI_EXTENSION = ROOT / "extensions" / "deskpal.ts"
+PACKAGER = ROOT / "scripts" / "package-gnome-extension.py"
 
 
 def require(condition, message):
@@ -85,7 +89,49 @@ def main():
 
     subprocess.run(["node", "--check", str(JS)], check=True)
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
-    print("PASS: GNOME indicator contract is narrow, click-through, and input-free")
+
+    with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+        subprocess.run([str(PACKAGER), "--output", first], check=True,
+                       stdout=subprocess.DEVNULL)
+        subprocess.run([str(PACKAGER), "--output", second], check=True,
+                       stdout=subprocess.DEVNULL)
+        names = {
+            "deskpal-shell-extension-gnome42.zip": ["42"],
+            "deskpal-shell-extension-gnome45-50.zip":
+                ["45", "46", "47", "48", "49", "50"],
+        }
+        for name, versions in names.items():
+            first_zip = Path(first) / name
+            second_zip = Path(second) / name
+            require(first_zip.is_file(), f"missing extension artifact: {name}")
+            require(hashlib.sha256(first_zip.read_bytes()).digest() ==
+                    hashlib.sha256(second_zip.read_bytes()).digest(),
+                    f"extension artifact is not deterministic: {name}")
+            with zipfile.ZipFile(first_zip) as archive:
+                require(set(archive.namelist()) ==
+                        {"extension.js", "metadata.json", "stylesheet.css"},
+                        f"unexpected artifact contents: {name}")
+                packaged_metadata = json.loads(archive.read("metadata.json"))
+                packaged_source = archive.read("extension.js").decode()
+                require(packaged_metadata["uuid"] == "indicator@deskpal.local",
+                        f"unexpected packaged UUID: {name}")
+                require(packaged_metadata["shell-version"] == versions,
+                        f"unexpected packaged Shell versions: {name}")
+                if versions == ["42"]:
+                    require("function init()" in packaged_source and
+                            "imports.ui.main" in packaged_source,
+                            "GNOME 42 artifact lost its legacy entry point")
+                else:
+                    require("export default class DeskpalIndicatorExtension" in
+                            packaged_source,
+                            "modern artifact lacks default Extension export")
+                    require("imports.ui.main" not in packaged_source and
+                            "function init()" not in packaged_source,
+                            "modern artifact retained legacy entry points")
+                    modern_path = Path(first) / "extension.mjs"
+                    modern_path.write_text(packaged_source)
+                    subprocess.run(["node", "--check", str(modern_path)], check=True)
+    print("PASS: GNOME indicator and Shell bridge artifacts are narrow and deterministic")
     return 0
 
 
