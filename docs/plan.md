@@ -266,6 +266,10 @@ broker actions will drive.
   - [x] Add native-Wayland records to visible-desktop window listing with full
         Shell-instance identity, omit Shell-observed Xwayland duplicates, and
         keep private sessions isolated from the host bus.
+  - [x] Prove the GNOME 42 bridge in a private nested compositor with a native-
+        Wayland fixture: enumerate it through D-Bus and Deskpal, preserve outer
+        pointer/focus/stacking state, and invalidate the Shell instance on
+        extension restart.
   - [x] Deterministically package the runtime-accepted GNOME 42 legacy artifact
         and a gated GNOME 45–50 ES-module test artifact from one implementation.
   - [ ] Run live acceptance on GNOME 45+ before removing its experimental

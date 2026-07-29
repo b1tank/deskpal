@@ -1,7 +1,7 @@
 /* exported init */
 'use strict';
 
-const {Clutter, Gio, GLib, Meta, St} = imports.gi;
+const {Clutter, Gio, GLib, Meta, Shell, St} = imports.gi;
 const Main = imports.ui.main;
 
 const SERVICE_NAME = 'org.deskpal.Indicator';

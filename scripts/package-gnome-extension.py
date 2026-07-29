@@ -11,12 +11,13 @@ SOURCE = ROOT / "gnome-extension" / "indicator@deskpal.local"
 UUID = "indicator@deskpal.local"
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)
 
-LEGACY_IMPORTS = """const {Clutter, Gio, GLib, Meta, St} = imports.gi;
+LEGACY_IMPORTS = """const {Clutter, Gio, GLib, Meta, Shell, St} = imports.gi;
 const Main = imports.ui.main;"""
 MODERN_IMPORTS = """import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';

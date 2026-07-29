@@ -31,6 +31,7 @@
     "test:frame-state": "python3 test/frame_state.py",
     "test:broker-contract": "python3 test/broker_contract.py",
     "test:indicator-live": "python3 test/e2e_indicator_live.py",
+    "test:shell-bridge-live": "test/e2e_shell_bridge_nested.sh",
     "test:semantic-visible": "python3 test/e2e_semantic_visible.py",
     "indicator:package": "scripts/package-gnome-extension.py --output dist",
     "indicator:install": "scripts/indicator.sh install",

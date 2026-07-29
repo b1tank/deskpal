@@ -14,6 +14,7 @@ versions.
 
 ```bash
 npm run test:indicator
+npm run test:shell-bridge-live
 npm run indicator:package
 npm run indicator:install
 npm run indicator:demo
@@ -30,8 +31,10 @@ The GNOME 42 artifact retains the legacy `imports.*`/`init()` entry point. The
 GNOME 45–50 artifact is generated deterministically from the same implementation
 with ES-module imports and a default `Extension` export. Static tests inspect
 both archives, enforce exact contents and metadata, syntax-check both entry
-points, and prove repeated builds are byte-identical. Automatic installation of
-the modern artifact is refused unless
+points, and prove repeated builds are byte-identical. The nested GNOME 42 test launches a private Shell and native-Wayland fixture,
+checks bridge and Deskpal enumeration, measures outer pointer/focus/stacking
+non-interference, and verifies restart identity. Automatic installation of the
+modern artifact is refused unless
 `DESKPAL_EXPERIMENTAL_GNOME_EXTENSION=1` is explicitly set for testing.
 
 GNOME Shell 42 on Wayland discovers a newly installed local extension only when

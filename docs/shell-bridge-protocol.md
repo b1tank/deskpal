@@ -142,3 +142,10 @@ XIDs. Deterministic release packaging now emits a runtime-accepted GNOME 42
 legacy artifact and a gated, syntax-checked GNOME 45–50 ES-module artifact from
 the same implementation. Modern live runtime acceptance remains pending, so its
 installer path requires an explicit experimental opt-in.
+
+GNOME 42 runtime acceptance runs under a private nested Wayland compositor with
+a real native-Wayland fixture. It verifies the three D-Bus methods, Deskpal's
+mixed-backend listing and environment report, one complete monitor layout,
+unchanged outer X pointer/focus/stacking state, and a new `shellInstanceId`
+after disable/enable. Run it with `npm run test:shell-bridge-live`; it skips with
+a concrete missing-command reason when the nested GNOME dependencies are absent.

@@ -62,6 +62,8 @@ def main():
             "missing replacement-safe window identity")
     require("geometryRevision" in source, "missing geometry freshness")
     require("get_window_actors" in source, "missing native window enumeration")
+    require("Shell, St} = imports.gi" in source,
+            "legacy bridge must import Shell.WindowTracker")
     require("windowCapture: false" in source, "bridge must deny capture")
     require("foregroundWindowManagement: false" in source,
             "bridge must deny window mutation")
