@@ -304,11 +304,14 @@ npm run test:live
 See [test/README.md](test/README.md) for prerequisites and test-writing
 guidance. The detailed comparison with Claude's built-in computer use and the
 north-star architecture plan are in
-[docs/computer-use-parity.md](docs/computer-use-parity.md).
+[docs/computer-use-parity.md](docs/computer-use-parity.md). Repository transfer,
+private/public boundaries, exact continuation milestones, and a ready-to-use new
+session prompt are in
+[docs/maintainer-handoff.md](docs/maintainer-handoff.md).
 
 ## Compatibility
 
-- **Display**: X11, Xwayland (GNOME Wayland with Xwayland works), or isolated Xvfb. Native Wayland-only windows are not yet discoverable/capturable.
+- **Display**: X11, Xwayland, isolated Xvfb, and read-only native-Wayland window metadata through the optional GNOME 42 Shell bridge. Native-Wayland per-window capture and surface control remain unavailable.
 - **HiDPI**: Handles display scaling (tested at 192 DPI / 2x scale)
 - **Apps**: Any X11 window — GTK, Qt, Electron, terminal apps, games
 - **Dialogs**: Finds and interacts with transient/child windows

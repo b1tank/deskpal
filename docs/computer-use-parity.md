@@ -38,7 +38,7 @@ compatibility mechanisms differ from that plan, `plan.md` is authoritative.
 | Exclude agent terminal from screenshots | Yes | Not implemented | Missing |
 | Clipboard approval | Requested separately | Clipboard tools are always exposed; host MCP policy may still prompt | Missing app-level policy |
 | Prompt-injection safety | Model-side classifier and action review | No content classifier; relies on model/host policy | Outside server alone |
-| Native Wayland windows | N/A on Linux (built-in computer use unavailable) | Accessible controls can be inspected/acted through AT-SPI; complete window discovery and pixel capture still require portals/compositor adapters | Major Linux gap narrowed |
+| Native Wayland windows | N/A on Linux (built-in computer use unavailable) | Optional GNOME 42 Shell bridge provides bounded read-only window metadata; accessible controls may use AT-SPI; exact per-window capture and surface control still require the trusted compositor broker | Major Linux gap narrowed |
 | Private verification environment | No documented equivalent | Goal-aware Xvfb sessions with scoped tools and process-group cleanup | Deskpal advantage |
 | OCR text targeting | Vision model points/clicks | Local Tesseract `click_text`, `read_screen_text`, and tooltip diffing | Deskpal advantage |
 | Headless/automation use | Interactive Claude sessions only | Standard MCP stdio server and deterministic E2E harness | Deskpal advantage |

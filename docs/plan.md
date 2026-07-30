@@ -122,6 +122,10 @@ broker actions will drive.
 
 ## Delivery plan
 
+Continuation state, repository boundaries, the next three milestones, tests, and
+a ready-to-use new-session prompt are in
+[`maintainer-handoff.md`](maintainer-handoff.md).
+
 ### Phase 1 — semantic-first, observable behavior
 
 - [x] Ship the native Pi extension with typed tools and persistent lifecycle.
@@ -247,10 +251,11 @@ broker actions will drive.
         client, exact surface generation, pointer/background capabilities, and
         monotonic expiry; synchronously revoke pending operations on explicit
         revocation, expiry, surface destruction, or caller disconnect.
-  - [ ] Connect those grants to authenticated transport; add protected-surface
-        and restart generations, explicit popup/drag/constraint/cancellation/
-        unknown-outcome evidence, clipboard/pointer-position evidence, and
-        broker-stream frame verification before exposing any Deskpal capability.
+  - [ ] **Milestone 1 — authenticated private transport:** connect caller-bound
+        grants to one authenticated, bounded transport peer; add protected-
+        surface and broker-restart generations, disconnect/lock revocation, and
+        explicit replay/expiry/cancellation/unknown-outcome/overflow tests. Keep
+        it nested and private with no public capability.
 - [ ] Add the optional, read-only GNOME Shell bridge defined in
       [`shell-bridge-protocol.md`](shell-bridge-protocol.md): bounded native-
       Wayland window enumeration, replacement-safe Shell-scoped identity,
@@ -279,10 +284,16 @@ broker actions will drive.
         and a gated GNOME 45–50 ES-module test artifact from one implementation.
   - [ ] Run live acceptance on GNOME 45+ before removing its experimental
         installer gate or making a runtime support claim.
+- [ ] **Milestone 2 — Deskpal broker client:** connect the accepted private
+      transport to `csrc/broker_contract.*` through a bounded backend module,
+      preserve backend-scoped identities and stable errors, and keep stock GNOME
+      on `backgroundUnavailable` with no automatic shared-seat escalation.
+- [ ] **Milestone 3 — capture-bound covered click:** bind grant, broker/surface/
+      generation, source frame, geometry revision, coordinates, operation ID,
+      deadline, and cancellation; dispatch to covered A while B remains focused,
+      then reuse regional frame verification and independently measure pointer,
+      focus, stacking, workspace, clipboard, B input, and A fixture state.
 - [ ] Extract current X11 behavior behind the backend interface.
-- [ ] Build a GNOME proof that captures and clicks a covered target surface
-      while the human uses another focused window, with no pointer, focus, or
-      stacking change.
 - [ ] Extend the proof to typing, scroll, drag, menus, and transient dialogs.
 - [ ] Add persistent compositor capture and a latest-frame cache linked to
       broker surface IDs.
