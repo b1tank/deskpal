@@ -192,11 +192,16 @@ recheck, revocation, and fail-closed states. A private grant layer now binds
 operations to one caller identity, the seat's canonical client, exact surface
 generation, bounded pointer/background capabilities, and monotonic expiry. It
 rechecks at acceptance and dispatch, and synchronously revokes pending operations
-on expiry, explicit revocation, surface destruction, or caller disconnect.
+on expiry, explicit revocation, surface destruction, or target-client disconnect.
+The injected owner string has now been replaced by an opaque peer created only
+from a live private peer-to-peer GDBus server connection with kernel-observed
+Unix credentials for the current user. Session/message-bus connections and
+cross-peer grant use are rejected; peer closure revokes pending operations
+without dispatch.
 
-This remains test-only. The caller identity is injected by the test rather than
-an authenticated peer, and there is no grant transport or permission UI,
-protected-surface classifier, complete popup/drag/cancellation/unknown-outcome
+This remains test-only. There is no opaque grant-handle registry, exported
+broker method surface, permission UI, protected-surface classifier, complete
+popup/drag/cancellation/unknown-outcome
 evidence, independent physical pointer/clipboard measurement, broker-stream
 before/after frames, or Xwayland route. `backgroundUnavailable` therefore remains
 the only truthful public capability.

@@ -289,6 +289,14 @@ P0–P2 and the broker acceptance gates pass.
         handles, replay, duplicate IDs, malformed/oversized requests, overflow,
         cancellation, forced unknown outcome, and every teardown ordering. Keep
         the service nested/private and advertise no public capability.
+    - [x] Replace the injected owner string with an opaque peer accepted only
+          from a live private peer-to-peer GDBus server connection whose Unix
+          credentials identify the current user. Reject session/message-bus
+          connections and cross-peer grant use; revoke pending operations without
+          dispatch when the peer connection closes.
+    - [ ] Add the bounded opaque grant-handle registry and narrow Click/Cancel/
+          GetOperationState/ReleaseGrant method surface; then complete the
+          remaining restart/protected-state, limits, and teardown matrix above.
 - [ ] Add the optional, read-only GNOME Shell bridge defined in
       [`shell-bridge-protocol.md`](shell-bridge-protocol.md): bounded native-
       Wayland window enumeration, replacement-safe Shell-scoped identity,
