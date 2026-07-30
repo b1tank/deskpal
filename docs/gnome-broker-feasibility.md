@@ -197,10 +197,13 @@ The injected owner string has now been replaced by an opaque peer created only
 from a live private peer-to-peer GDBus server connection with kernel-observed
 Unix credentials for the current user. Session/message-bus connections and
 cross-peer grant use are rejected; peer closure revokes pending operations
-without dispatch.
+without dispatch. One registry per peer now owns at most 16 random UUID grant
+handles, prunes expiry, removes every handle on disconnect, and rejects malformed,
+oversized, unknown, released, copied, and over-limit handles. Operations derive
+the bound surface and generation from the grant rather than caller arguments.
 
-This remains test-only. There is no opaque grant-handle registry, exported
-broker method surface, permission UI, protected-surface classifier, complete
+This remains test-only. There is no exported broker method surface, permission
+UI, protected-surface classifier, complete
 popup/drag/cancellation/unknown-outcome
 evidence, independent physical pointer/clipboard measurement, broker-stream
 before/after frames, or Xwayland route. `backgroundUnavailable` therefore remains

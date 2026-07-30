@@ -294,9 +294,14 @@ P0–P2 and the broker acceptance gates pass.
           credentials identify the current user. Reject session/message-bus
           connections and cross-peer grant use; revoke pending operations without
           dispatch when the peer connection closes.
-    - [ ] Add the bounded opaque grant-handle registry and narrow Click/Cancel/
-          GetOperationState/ReleaseGrant method surface; then complete the
-          remaining restart/protected-state, limits, and teardown matrix above.
+    - [x] Add one bounded registry per peer with at most 16 random UUID grant
+          handles. Bind lookup to the exact peer, derive operation targets only
+          from the grant, prune expiry, remove all handles on disconnect, and
+          reject malformed, oversized, unknown, released, copied, and over-limit
+          handles.
+    - [ ] Add the narrow Click/Cancel/GetOperationState/ReleaseGrant method
+          surface; then complete the remaining restart/protected-state, request
+          limits, and teardown matrix above.
 - [ ] Add the optional, read-only GNOME Shell bridge defined in
       [`shell-bridge-protocol.md`](shell-bridge-protocol.md): bounded native-
       Wayland window enumeration, replacement-safe Shell-scoped identity,

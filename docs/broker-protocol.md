@@ -343,10 +343,15 @@ generation, bounded pointer/background capabilities, and monotonic expiry, with
 revocation on expiry, explicit revocation, surface destruction, or target-client
 disconnect.
 
-This is only the authenticated peer foundation. There is no opaque grant-handle
-registry, exported method surface, trusted permission UI, restart/protected-state
-generation, or public capability. Bounded parsing and broker operations remain
-separate milestones.
+A bounded registry now owns at most 16 random UUID grant handles for each exact
+peer. Handles cannot cross peers; malformed, oversized, unknown, released,
+copied, expired, and over-limit handles fail closed. Disconnect removes every
+entry. Operation target surface and generation are resolved only from the grant,
+not caller arguments.
+
+There is still no exported method surface, trusted permission UI, restart/
+protected-state generation, or public capability. Bounded request parsing and
+broker operations remain separate milestones.
 
 Implementation now proceeds in this strict order:
 
