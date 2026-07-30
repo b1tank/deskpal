@@ -18,11 +18,11 @@ Deskpal has two intentionally separate repositories:
    public repository, and never propose or push the changes to Mutter upstream.
 
 At handoff, public `main` is clean at `5cb2402` before this document. The private
-proof's last implementation commit is `1963e6c7e`; a later local documentation
-commit, `467683a35`, adds `DESKPAL-HANDOFF.md` and corrects a stale proof note.
-Confirm that documentation commit reached the successor-owned private remote
-before beginning implementation. Do not assume a remote transfer succeeded just
-because a local URL was changed.
+proof's last implementation commit is `1963e6c7e`; a later local commit titled
+`docs: add private Mutter maintainer handoff` adds `DESKPAL-HANDOFF.md`, corrects
+a stale proof note, and records the successor-owned remote boundary. Confirm that
+documentation commit reached the private remote before beginning implementation.
+Do not assume a transfer succeeded just because a local URL was changed.
 
 For ownership migration:
 
