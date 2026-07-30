@@ -149,3 +149,14 @@ mixed-backend listing and environment report, one complete monitor layout,
 unchanged outer X pointer/focus/stacking state, and a new `shellInstanceId`
 after disable/enable. Run it with `npm run test:shell-bridge-live`; it skips with
 a concrete missing-command reason when the nested GNOME dependencies are absent.
+
+A live host-session lifecycle check on 2026-07-29 additionally created two
+native-Wayland GTK windows with the same title and observed distinct surface
+IDs. Resizing one retained its surface ID and advanced `geometryRevision` from
+1 to 2; closing it removed the record; creating a replacement allocated a new
+ID rather than reusing the closed ID. Deskpal listed both duplicate-title
+records independently. Disabling and enabling the extension changed
+`shellInstanceId`, invalidating all identities from the earlier instance. The
+fixtures were then closed and confirmed absent. Lock/unlock and suspend/resume
+remain separate disruptive acceptance cases and were not inferred from this
+proof.

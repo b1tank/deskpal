@@ -270,6 +270,11 @@ broker actions will drive.
         Wayland fixture: enumerate it through D-Bus and Deskpal, preserve outer
         pointer/focus/stacking state, and invalidate the Shell instance on
         extension restart.
+  - [x] Verify live duplicate-title separation, geometry revision, close/new
+        identity, mixed Deskpal listing, extension-restart invalidation, and
+        fixture cleanup on the GNOME 42 development session.
+  - [ ] Verify lock/unlock and suspend/resume invalidation in an explicitly
+        scheduled disruptive test; do not trigger either during routine tests.
   - [x] Deterministically package the runtime-accepted GNOME 42 legacy artifact
         and a gated GNOME 45–50 ES-module test artifact from one implementation.
   - [ ] Run live acceptance on GNOME 45+ before removing its experimental
