@@ -109,6 +109,8 @@ def run_suite():
         assert moved["verified"] is True, moved
         assert moved["inputDelivered"] is False, moved
         assert_unchanged(baseline, desktop_state())
+        released = json.loads(text(owner.tool("release_control")))
+        assert released["released"] is True, released
 
         remote_id = next(
             cursor["cursorId"]
