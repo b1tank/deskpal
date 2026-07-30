@@ -341,18 +341,42 @@ or caller disconnect. This is not authenticated transport or trusted permission
 UI and does not change the public capability result. Parsing and backend
 transport remain separate milestones.
 
-1. Extend the foundation with grant ownership and bounded wire parsing only when
-   a private compositor transport exists; do not invent an unauthenticated local
-   broker protocol first.
-2. Create the Mutter work only in a private local clone outside the public
-   Deskpal repository. Use a local prefix/container and nested compositor; never
-   modify the active host compositor or prepare an upstream submission.
-3. Build a read-only GNOME spike for exact authorized surface identity and
-   persistent covered-surface capture.
-4. Resolve the GNOME direct-delivery feasibility gate. Record
-   `backgroundUnavailable` if no supported primitive exists.
-5. Only after the primitive is proven, implement one capture-bound covered click
-   with cancellation and the evidence contract above.
-6. Reuse Deskpal's existing frame settling and explicit regional verification.
-7. Harden grants, lock/revocation, protected surfaces, rate limits, crash
-   cleanup, and confused-deputy cases before broader input capabilities.
+Implementation now proceeds in this strict order:
+
+1. **Authenticated private transport.** Put the proven caller-bound grant behind
+   one bounded peer-authenticated transport in the private nested compositor.
+   Authority comes from verified transport credentials, never a supplied PID,
+   UID, title, app ID, environment value, command line, or bearer string. Opaque
+   handles are non-transferable and bound to broker instance, exact client/
+   surface generation, capabilities, expiry, and revocation. Add protected-state
+   and restart generations, bounded peers/grants/operations/messages/queues/
+   rates/deadlines/memory, and synchronous cleanup on disconnect, replacement,
+   expiry, explicit revocation, lock, user switch, and restart. Acceptance covers
+   wrong peer/user, copied handles, replay, duplicate IDs, malformed/oversized
+   requests, overflow, pre-dispatch cancellation, forced unknown outcome, and all
+   teardown orderings. It remains private and advertises no Deskpal capability.
+2. **Deskpal broker client.** After transport acceptance, add one cohesive
+   bounded client module around `csrc/broker_contract.*`. Negotiate instance,
+   surface identity, coordinate spaces, limits, and side-effect guarantees;
+   preserve distinct Shell/X11/AT-SPI/broker identities; own parsing, timeout,
+   cancellation, descriptor, listener, disconnect, and shutdown cleanup. Stock
+   GNOME and incomplete guarantees continue returning `backgroundUnavailable`;
+   unknown outcomes are never retried or escalated to shared-seat input.
+3. **Capture-bound covered click.** Add a broker-owned exact-surface frame stream
+   and bind grant generation, complete surface identity, source frame, geometry,
+   coordinates, operation, deadline, and cancellation in the final atomic check.
+   Reuse Deskpal frame settling and regional verification, while reporting broker
+   delivery separately from application success. Pass the complete covered-A/
+   focused-B action gate above, including stale/replacement/revocation/restart/
+   protected/unknown-outcome failures, before exposing even a development route.
+4. **Extension compatibility, not authority.** Complete GNOME 45–50 live and
+   disruptive lifecycle acceptance separately. The Shell bridge stays read-only
+   and the indicator stays visual-only; neither receives capture, input, grant,
+   or compositor-broker methods.
+5. **Hardening and breadth.** Only after the covered-click gate, add permission
+   UI, ordinary-app evidence, popup/subsurface/drag/grab policy, broader input,
+   packaging, and an exact Xwayland route or explicit permanent refusal.
+
+Private Mutter work remains in its private repository, local prefix/container,
+and nested compositor. It is never vendored here, installed over the active host
+compositor, mirrored publicly, or prepared for upstream submission.

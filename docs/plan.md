@@ -88,12 +88,12 @@ After an action, wait on accessibility events or frame stability rather than a
 fixed delay where possible. Success means observed application state changed as
 expected; command completion alone is not evidence.
 
-## Immediate milestone — capture-bound agent cursor
+## Completed foundation — capture-bound agent cursor
 
-Prove the first truthful Pi-to-desktop vertical slice before attempting broker
-input: Pi observes the desktop, selects a point in that observation, and moves
-its session-owned logical cursor to the corresponding stage position without
-changing application state or the human seat.
+The first truthful Pi-to-desktop vertical slice is complete: Pi observes the
+desktop, selects a point in that observation, and moves its session-owned logical
+cursor to the corresponding stage position without changing application state or
+the human seat.
 
 The slice must:
 
@@ -122,9 +122,36 @@ broker actions will drive.
 
 ## Delivery plan
 
-Continuation state, repository boundaries, the next three milestones, tests, and
-a ready-to-use new-session prompt are in
-[`maintainer-handoff.md`](maintainer-handoff.md).
+### Priority order
+
+Work follows this order because authenticated compositor authority is the
+critical path to the product contract; Shell metadata and visual overlays cannot
+substitute for exact covered-surface capture or delivery.
+
+1. **P0 — authenticated private Mutter transport.** Replace the injected test
+   owner with a bounded authenticated peer, non-transferable grants, protected-
+   state/restart generations, and complete disconnect/revocation ownership. Keep
+   it private, nested, and capability-neutral in public Deskpal.
+2. **P1 — Deskpal broker client.** Only after P0 passes, add one bounded public
+   transport module around `csrc/broker_contract.*`, preserving backend-scoped
+   identities, stable errors, cancellation, and stock-GNOME refusal.
+3. **P2 — capture-bound covered click.** Bind exact broker/surface/grant/frame/
+   geometry/action identity, dispatch to covered A, and independently verify A's
+   frame/application change plus zero pointer, focus, stacking, workspace,
+   clipboard, or foreground-B input side effects.
+4. **P3 — GNOME extension compatibility.** In parallel only when it does not
+   delay P0–P2, finish GNOME 45–50 live acceptance and explicitly scheduled
+   lock/unlock and suspend/resume identity tests. The extension remains read-only
+   and visual-only; it never gains capture, input, or grant authority.
+5. **P4 — hardening and breadth.** After the covered-click gate, add ordinary
+   GTK/Qt/Electron evidence, popup/subsurface/drag/grab policy, broader input,
+   permission UI, packaging, and either an exact Xwayland route or permanent
+   explicit refusal.
+
+Each priority ends as a coherent tested commit in its owning repository. Private
+Mutter source, artifacts, and patch history stay private and are never vendored
+or submitted upstream. Public capability remains `backgroundUnavailable` until
+P0–P2 and the broker acceptance gates pass.
 
 ### Phase 1 — semantic-first, observable behavior
 
@@ -251,11 +278,17 @@ a ready-to-use new-session prompt are in
         client, exact surface generation, pointer/background capabilities, and
         monotonic expiry; synchronously revoke pending operations on explicit
         revocation, expiry, surface destruction, or caller disconnect.
-  - [ ] **Milestone 1 — authenticated private transport:** connect caller-bound
-        grants to one authenticated, bounded transport peer; add protected-
-        surface and broker-restart generations, disconnect/lock revocation, and
-        explicit replay/expiry/cancellation/unknown-outcome/overflow tests. Keep
-        it nested and private with no public capability.
+  - [ ] **P0 — authenticated private transport:** connect caller-bound grants to
+        a verified Unix/session peer identity rather than any supplied PID, UID,
+        owner string, environment value, command line, or copied token. Make
+        opaque handles non-transferable and bind them to broker instance, exact
+        client/surface generation, capabilities, expiry, and revocation state.
+        Bound peers, grants, operations, messages, queues, rates, deadlines, and
+        memory. Revoke synchronously on disconnect, expiry, explicit revocation,
+        replacement, restart, lock, or user switch. Test wrong peer/user, copied
+        handles, replay, duplicate IDs, malformed/oversized requests, overflow,
+        cancellation, forced unknown outcome, and every teardown ordering. Keep
+        the service nested/private and advertise no public capability.
 - [ ] Add the optional, read-only GNOME Shell bridge defined in
       [`shell-bridge-protocol.md`](shell-bridge-protocol.md): bounded native-
       Wayland window enumeration, replacement-safe Shell-scoped identity,
@@ -284,15 +317,23 @@ a ready-to-use new-session prompt are in
         and a gated GNOME 45–50 ES-module test artifact from one implementation.
   - [ ] Run live acceptance on GNOME 45+ before removing its experimental
         installer gate or making a runtime support claim.
-- [ ] **Milestone 2 — Deskpal broker client:** connect the accepted private
-      transport to `csrc/broker_contract.*` through a bounded backend module,
-      preserve backend-scoped identities and stable errors, and keep stock GNOME
-      on `backgroundUnavailable` with no automatic shared-seat escalation.
-- [ ] **Milestone 3 — capture-bound covered click:** bind grant, broker/surface/
-      generation, source frame, geometry revision, coordinates, operation ID,
-      deadline, and cancellation; dispatch to covered A while B remains focused,
-      then reuse regional frame verification and independently measure pointer,
-      focus, stacking, workspace, clipboard, B input, and A fixture state.
+- [ ] **P1 — Deskpal broker client:** connect the accepted private transport to
+      `csrc/broker_contract.*` through one bounded backend module. Negotiate
+      instance, exact surfaces, coordinate spaces, operation limits, and side-
+      effect guarantees; keep Shell IDs, XIDs, AT-SPI paths, and broker IDs
+      separate; own timeout/cancellation/disconnect cleanup; map only stable
+      errors; never retry unknown outcomes or escalate automatically. Initially
+      expose only a test/development capability and keep stock GNOME on
+      `backgroundUnavailable`.
+- [ ] **P2 — capture-bound covered click:** obtain a broker-owned exact-surface
+      before frame, then bind grant generation, broker/surface/generation, source
+      frame, geometry revision, coordinate space, local coordinates, operation
+      ID, deadline, and cancellation in the final dispatch check. With A fully
+      covered by focused/topmost B, require broker delivery evidence separately
+      from A's fixture and regional frame verification; independently measure
+      physical pointer, focus, stacking, workspace, clipboard, and B input.
+      Replacement, revocation, restart, stale frame, changed geometry, protected
+      target, cancellation, and unknown outcome must fail with the contract state.
 - [ ] Extract current X11 behavior behind the backend interface.
 - [ ] Extend the proof to typing, scroll, drag, menus, and transient dialogs.
 - [ ] Add persistent compositor capture and a latest-frame cache linked to

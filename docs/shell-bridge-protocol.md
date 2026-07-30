@@ -160,3 +160,17 @@ records independently. Disabling and enabling the extension changed
 fixtures were then closed and confirmed absent. Lock/unlock and suspend/resume
 remain separate disruptive acceptance cases and were not inferred from this
 proof.
+
+## Remaining priority
+
+Shell-extension work is a secondary compatibility lane behind the authenticated
+Mutter transport, Deskpal broker client, and capture-bound covered-click gate in
+[`plan.md`](plan.md). The remaining extension acceptance order is:
+
+1. run the GNOME 45–50 artifact on matching live Shell versions before removing
+   its experimental installer gate or making a runtime support claim; and
+2. run explicitly scheduled lock/unlock and suspend/resume checks, requiring a
+   new `shellInstanceId` or a fail-closed unavailable result across each lifecycle.
+
+Neither task may add capture, input, grant, permission, or broker authority to
+this interface. Those responsibilities remain in the trusted compositor broker.

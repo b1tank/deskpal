@@ -166,8 +166,8 @@ grab, and a dedicated nested compositor. Unsupported states must return
 
 ## Private implementation progress
 
-The private local Mutter branch now proves two prerequisites without changing
-or advertising any public Deskpal capability:
+The private local Mutter branch now proves the direct-delivery foundation
+without changing or advertising any public Deskpal capability:
 
 - a pointer-only secondary `wl_seat` filtered to one exact Wayland client, hidden
   from another client, and removed on disconnect; and
@@ -201,24 +201,34 @@ evidence, independent physical pointer/clipboard measurement, broker-stream
 before/after frames, or Xwayland route. `backgroundUnavailable` therefore remains
 the only truthful public capability.
 
-## Next steps
+## Prioritized next steps
 
-1. Keep `get_environment_status` truthful: stock GNOME has no background pixel
-   input backend.
-2. Build the read-only ScreenCast window-stream spike separately; do not confuse
-   capture success with input feasibility.
-3. Create the minimal Mutter change in a private local clone outside Deskpal.
-   Build/install only to an isolated prefix or container; do not vendor the patch
-   here, alter the active host compositor, or prepare any upstream submission.
-4. Design an independent agent pointer context and direct authorized-surface
-   click in that private clone.
-5. Run it only in a nested Mutter test session with two fixture clients: A
-   covered, B focused and receiving human input.
-6. Require the complete covered-window acceptance gate from
-   [`broker-protocol.md`](broker-protocol.md) before exposing any host tool.
-7. If the patch cannot preserve client protocol semantics and all stated side
-   effects, stop and retain `backgroundUnavailable` rather than adding a
-   compatibility workaround.
+1. **Authenticated private transport:** replace the test-injected owner with a
+   bounded authenticated transport peer and non-transferable grant handles. Add
+   broker/protected-state generations and synchronous disconnect, expiry,
+   revocation, replacement, lock, and restart cleanup. Prove wrong-peer theft,
+   replay, malformed bounds, overflow, cancellation, unknown outcome, and every
+   teardown ordering in the nested compositor. This is the current critical path.
+2. **Deskpal broker client:** only after that transport passes, add one bounded
+   public client around `csrc/broker_contract.*`, with separate backend identity
+   types, stable errors, explicit timeout/cancellation ownership, no unknown-
+   outcome retry, and continued stock-GNOME `backgroundUnavailable` reporting.
+3. **Capture-bound covered click:** add a broker-owned exact-window frame stream
+   and bind grant/surface/frame/geometry/action freshness. Reuse Deskpal regional
+   verification and require covered A to change while focused B, the physical
+   pointer, focus, stacking, workspace, clipboard, and B input remain unchanged.
+4. Complete GNOME 45–50 Shell-extension live acceptance and disruptive identity
+   lifecycle tests only as a secondary compatibility lane. The extension remains
+   read-only/visual-only and cannot satisfy or broaden broker authority.
+5. After the core gate, add protected/permission UI policy, ordinary GTK/Qt/
+   Electron evidence, popup/subsurface/drag/grab behavior, broader input, and an
+   exact Xwayland route or explicit permanent refusal.
+
+Keep all Mutter work in the private clone, isolated prefix/container, and nested
+compositor. Never vendor it here, alter the active host compositor, mirror it
+publicly, or prepare an upstream submission. If exact protocol semantics,
+bounded lifecycle ownership, or non-interference cannot be preserved, stop and
+retain `backgroundUnavailable` rather than adding a compatibility workaround.
 
 ## Reproduction references
 

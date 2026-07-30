@@ -304,10 +304,11 @@ npm run test:live
 See [test/README.md](test/README.md) for prerequisites and test-writing
 guidance. The detailed comparison with Claude's built-in computer use and the
 north-star architecture plan are in
-[docs/computer-use-parity.md](docs/computer-use-parity.md). Repository transfer,
-private/public boundaries, exact continuation milestones, and a ready-to-use new
-session prompt are in
-[docs/maintainer-handoff.md](docs/maintainer-handoff.md).
+[docs/computer-use-parity.md](docs/computer-use-parity.md). The canonical product
+goal and prioritized delivery order are in [docs/plan.md](docs/plan.md); the
+trusted surface contract and GNOME implementation evidence are in
+[docs/broker-protocol.md](docs/broker-protocol.md) and
+[docs/gnome-broker-feasibility.md](docs/gnome-broker-feasibility.md).
 
 ## Compatibility
 
