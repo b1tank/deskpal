@@ -153,6 +153,14 @@ Mutter source, artifacts, and patch history stay private and are never vendored
 or submitted upstream. Public capability remains `backgroundUnavailable` until
 P0–P2 and the broker acceptance gates pass.
 
+Before P1, choose an explicit deployment model. The current safety boundary
+permits the patched compositor only in a container, isolated prefix, or nested
+session and forbids modifying the active host compositor. The north star cannot
+become control of the existing GNOME session unless a separately reviewed path
+is approved—for example a maintained private GNOME session/package or another
+trusted deployment boundary. Until then this is a private feasibility proof, not
+a production host backend.
+
 ### Phase 1 — semantic-first, observable behavior
 
 - [x] Ship the native Pi extension with typed tools and persistent lifecycle.
@@ -299,9 +307,15 @@ P0–P2 and the broker acceptance gates pass.
           from the grant, prune expiry, remove all handles on disconnect, and
           reject malformed, oversized, unknown, released, copied, and over-limit
           handles.
-    - [ ] Add the narrow Click/Cancel/GetOperationState/ReleaseGrant method
-          surface; then complete the remaining restart/protected-state, request
-          limits, and teardown matrix above.
+    - [x] Reject non-finite, negative, out-of-Wayland-fixed-range, and outside-
+          input-region coordinates before integer conversion; bound operation ID
+          scanning to 63 bytes; remove caller-controlled Wayland timestamps and
+          derive event time from compositor monotonic time.
+    - [ ] Before methods, bound operation count/terminal retention, resolve the
+          mismatch between 16 handles and one authorized surface per seat, and
+          prove an ordinary GTK client dynamically binds and routes the secondary
+          seat. Then add Click/Cancel/GetOperationState/ReleaseGrant and complete
+          restart/protected-state, deadline, rate, queue, and teardown coverage.
 - [ ] Add the optional, read-only GNOME Shell bridge defined in
       [`shell-bridge-protocol.md`](shell-bridge-protocol.md): bounded native-
       Wayland window enumeration, replacement-safe Shell-scoped identity,

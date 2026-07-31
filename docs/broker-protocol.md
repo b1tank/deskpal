@@ -349,9 +349,17 @@ copied, expired, and over-limit handles fail closed. Disconnect removes every
 entry. Operation target surface and generation are resolved only from the grant,
 not caller arguments.
 
+Click request primitives now reject non-finite, negative, out-of-Wayland-fixed-
+range, and outside-input-region coordinates before integer conversion. Operation
+ID scanning is bounded to 63 bytes, and Wayland event time is derived from
+compositor monotonic time rather than a caller argument.
+
 There is still no exported method surface, trusted permission UI, restart/
-protected-state generation, or public capability. Bounded request parsing and
-broker operations remain separate milestones.
+protected-state generation, operation-count/retention bound, or public
+capability. The current seat has one mutable authorized surface despite the
+registry allowing 16 handles, and only the purpose-built fixture has consumed
+the dynamically added seat. Those cardinality and ordinary-toolkit gates precede
+bounded request parsing and broker methods.
 
 Implementation now proceeds in this strict order:
 
@@ -391,4 +399,7 @@ Implementation now proceeds in this strict order:
 
 Private Mutter work remains in its private repository, local prefix/container,
 and nested compositor. It is never vendored here, installed over the active host
-compositor, mirrored publicly, or prepared for upstream submission.
+compositor, mirrored publicly, or prepared for upstream submission. Before a
+public client is built, the project must choose a separately reviewed deployment
+model; under the current boundary the proof cannot control applications in the
+existing host compositor session.

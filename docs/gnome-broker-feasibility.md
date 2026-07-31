@@ -202,8 +202,13 @@ handles, prunes expiry, removes every handle on disconnect, and rejects malforme
 oversized, unknown, released, copied, and over-limit handles. Operations derive
 the bound surface and generation from the grant rather than caller arguments.
 
+Request primitives now reject non-finite, negative, out-of-Wayland-fixed-range,
+and outside-input-region coordinates before conversion, scan operation IDs with
+a 63-byte bound, and derive Wayland event timestamps from compositor monotonic
+time instead of caller input.
+
 This remains test-only. There is no exported broker method surface, permission
-UI, protected-surface classifier, complete
+UI, protected-surface classifier, bounded operation retention, complete
 popup/drag/cancellation/unknown-outcome
 evidence, independent physical pointer/clipboard measurement, broker-stream
 before/after frames, or Xwayland route. `backgroundUnavailable` therefore remains
@@ -234,9 +239,14 @@ the only truthful public capability.
 
 Keep all Mutter work in the private clone, isolated prefix/container, and nested
 compositor. Never vendor it here, alter the active host compositor, mirror it
-publicly, or prepare an upstream submission. If exact protocol semantics,
-bounded lifecycle ownership, or non-interference cannot be preserved, stop and
-retain `backgroundUnavailable` rather than adding a compatibility workaround.
+publicly, or prepare an upstream submission. Before P1, explicitly choose a
+reviewed deployment model: the current boundary cannot turn this proof into
+control of applications in the existing host compositor session. Also resolve
+one-seat/one-authorized-surface versus multi-handle cardinality and prove dynamic
+secondary-seat behavior in an ordinary GTK client before exporting methods. If
+exact protocol semantics, bounded lifecycle ownership, or non-interference
+cannot be preserved, stop and retain `backgroundUnavailable` rather than adding
+a compatibility workaround.
 
 ## Reproduction references
 
