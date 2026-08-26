@@ -20,7 +20,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
-    "build": "meson setup build --reconfigure 2>/dev/null; ninja -C build",
+    "build": "(meson setup build --reconfigure 2>/dev/null || meson setup build) && ninja -C build",
     "build:no-atspi": "meson setup build-no-atspi --reconfigure -Datspi=disabled 2>/dev/null || meson setup build-no-atspi -Datspi=disabled; ninja -C build-no-atspi",
     "build:asan": "meson setup build-asan --reconfigure -Db_sanitize=address,undefined -Db_lundef=false 2>/dev/null || meson setup build-asan -Db_sanitize=address,undefined -Db_lundef=false; ninja -C build-asan",
     "test": "npm run test:safe",
