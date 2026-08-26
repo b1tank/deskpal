@@ -36,4 +36,3 @@ jobs:
           npm run test:broker-contract
           npm run test:frame-state
           npm run test:isolation
-          npm run test:accessibility

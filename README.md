@@ -8,7 +8,7 @@
 
 The trusted Mutter broker described in the roadmap is private research and is not included, installed, or required for the capabilities documented as available here.
 
-Hosted CI covers the deterministic protocol, frame, isolation, and accessibility checks. The complete computer-use and sanitizer suites remain release-qualification commands for a supported Ubuntu GNOME environment; generic hosted runners are not treated as qualified live desktops.
+Hosted CI covers the deterministic protocol, frame, and isolation checks. The complete computer-use and sanitizer suites remain release-qualification commands for a supported Ubuntu GNOME environment; generic hosted runners are not treated as qualified live desktops.
 
 ## What it does
 
