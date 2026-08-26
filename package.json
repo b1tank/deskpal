@@ -1,7 +1,7 @@
 {
   "name": "deskpal",
   "version": "0.2.0",
-  "description": "Playwright for the desktop — a C-native MCP server giving AI agents eyes and hands for any Linux desktop app",
+  "description": "A C-native MCP server for inspecting and controlling supported Linux desktop applications",
   "keywords": [
     "pi-package",
     "computer-use",

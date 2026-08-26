@@ -1,6 +1,12 @@
 # deskpal
 
-**Playwright for the desktop** — a C-native MCP server that gives AI agents eyes and hands for any Linux desktop app.
+**Playwright for the desktop** - a C-native MCP server for inspecting and controlling supported Linux desktop applications.
+
+> **Experimental alpha.** Tested on Ubuntu 22.04 with GNOME 42, X11/Xwayland, AT-SPI, and private Xvfb sessions. Native-Wayland per-window capture and background surface control are not available in the public build. Omarchy, Arch Linux, Hyprland, KDE, and GNOME 45+ have not been release-qualified.
+>
+> Visible-desktop compatibility routes can use the shared pointer, keyboard focus, or clipboard. Use private Xvfb sessions for non-interfering verification. Xvfb is display isolation, not an OS security sandbox. Filesystem reads and process launch are disabled unless explicitly enabled.
+
+The trusted Mutter broker described in the roadmap is private research and is not included, installed, or required for the capabilities documented as available here.
 
 ## What it does
 
