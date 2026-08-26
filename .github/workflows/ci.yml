@@ -28,5 +28,12 @@ jobs:
         with:
           node-version: 24
       - run: npm run build
-      - run: npm test
-      - run: npm run test:asan
+      - name: Deterministic protocol and isolation checks
+        run: |
+          npm run test:extension
+          npm run test:indicator
+          npm run test:shell-bridge
+          npm run test:broker-contract
+          npm run test:frame-state
+          npm run test:isolation
+          npm run test:accessibility

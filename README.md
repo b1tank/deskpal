@@ -8,6 +8,8 @@
 
 The trusted Mutter broker described in the roadmap is private research and is not included, installed, or required for the capabilities documented as available here.
 
+Hosted CI covers the deterministic protocol, frame, isolation, and accessibility checks. The complete computer-use and sanitizer suites remain release-qualification commands for a supported Ubuntu GNOME environment; generic hosted runners are not treated as qualified live desktops.
+
 ## What it does
 
 deskpal controls the Linux desktop via the [Model Context Protocol](https://modelcontextprotocol.io/). It can launch apps, find windows, take screenshots, read text via OCR, click buttons by name, type, scroll, drag — anything a human can do with a mouse and keyboard.
